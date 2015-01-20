@@ -107,14 +107,18 @@ Value *buildGetStackValue(Value *stackItemPtr) {
 
 }
 
+void buildSetStackValue(Value *stackItemPtr, Value *newValue) {
+  Value *idx[] = { getInt32(0), getInt32(0) };
+  Value *valPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingVal");
+  builder.CreateStore(newValue, valPtr);
+}
+
 void buildSetStackItem(Value *stackItemPtr, Value *newValue, Value *newPtr) { // maybe stackItemPtr should have the right type
   // Generate code to set the fields of a stack item structure
+  
+  buildSetStackValue(stackItemPtr, newValue);
 
-  std::vector<Value*> idx (2, getInt32(0));
-  Value *valPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "val");
-  builder.CreateStore(newValue, valPtr);
-
-  idx.at(1) = getInt32(1);
+  Value *idx[] = { getInt32(0), getInt32(1) }; 
   Value *ptrPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "settingPtr");
   builder.CreateStore(newPtr, ptrPtr);
 
@@ -125,7 +129,7 @@ struct StackItem buildGetStackItem(Value *stackItemPtr) {
 
   struct StackItem item;
 
-  item.val = getStackItemValue(stackItemPtr);
+  item.val = buildGetStackValue(stackItemPtr);
 
   Value *idx[] = { getInt32(0), getInt32(1) };
   Value *ptrPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingPtr");
@@ -231,12 +235,15 @@ int main() {
   builder.SetInsertPoint(popEntry);
   builder.CreateRet(buildPop());
    
-  add = makeBuiltIn("add"); 
-  std::vector<Value *> stack = buildPopX(2); 
-  Value *result = builder.CreateFAdd(stack.at(0), stack.at(1), "addtmp");
-  builder.CreateCall(push, result);
+  std::vector<Value *> stack;
+
+  add = makeBuiltIn("add");
+  Value *a = builder.CreateCall(pop, "poppedForAdd");
+  Value *b = buildGetStackValue(TheStack);
+  Value *result = builder.CreateFAdd(a, b, "addtmp");
+  buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
- 
+
   sub = makeBuiltIn("sub"); 
   stack = buildPopX(2); 
   result = builder.CreateFSub(stack.at(1), stack.at(0), "subtmp");
