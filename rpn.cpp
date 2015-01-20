@@ -33,6 +33,7 @@ Function *mul;
 Function *divi;
 Function *dot;
 Function *dup;
+Function *swa;
 
 Value *fstring;
 
@@ -108,6 +109,7 @@ Value *buildGetStackValue(Value *stackItemPtr) {
 }
 
 void buildSetStackValue(Value *stackItemPtr, Value *newValue) {
+  // Generate code to set the value from the stack element pointed to by stackItemPtr
   Value *idx[] = { getInt32(0), getInt32(0) };
   Value *valPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingVal");
   builder.CreateStore(newValue, valPtr);
@@ -278,6 +280,13 @@ int main() {
   builder.CreateCall(push, a);
   builder.CreateRetVoid();
 
+  swa = makeBuiltIn("swap");
+  StackItem top = buildGetStackItem(TheStack);
+  a = buildGetStackValue(top.ptr);
+  buildSetStackValue(TheStack, a);
+  buildSetStackValue(top.ptr, top.val);
+  builder.CreateRetVoid();
+
   builtIns["+"] = add;  // Do forth words even need to correspond to functions?
   builtIns["-"] = sub;
   builtIns["*"] = mul;
@@ -285,6 +294,7 @@ int main() {
 
   builtIns["dup"] = dup;  
   builtIns["."] = dot;
+  builtIns["swap"] = swa;
 
   // Insert a main function and an entry block 
   FunctionType *mainType = FunctionType::get(int32Ty, false);
