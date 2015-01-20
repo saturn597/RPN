@@ -245,33 +245,37 @@ int main() {
   builder.CreateRetVoid();
 
   sub = makeBuiltIn("sub"); 
-  stack = buildPopX(2); 
-  result = builder.CreateFSub(stack.at(1), stack.at(0), "subtmp");
-  builder.CreateCall(push, result);
+  a = builder.CreateCall(pop, "poppedForSub");
+  b = buildGetStackValue(TheStack);
+  result = builder.CreateFSub(b, a, "subtmp");
+  buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
-    
-  mul = makeBuiltIn("mul"); 
-  stack = buildPopX(2); 
-  result = builder.CreateFMul(stack.at(0), stack.at(1), "multmp");
-  builder.CreateCall(push, result);
+  
+  // Do I do it like that, or with the more straightforward popping both values?
+
+  mul = makeBuiltIn("mul");
+  a = builder.CreateCall(pop, "poppedForMul");
+  b = buildGetStackValue(TheStack);
+  result = builder.CreateFMul(b, a, "multmp");
+  buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
   
   divi = makeBuiltIn("div"); 
-  stack = buildPopX(2); 
-  result = builder.CreateFDiv(stack.at(0), stack.at(1), "divtmp");
-  builder.CreateCall(push, result);
+  a = builder.CreateCall(pop, "poppedForMul");
+  b = buildGetStackValue(TheStack);
+  result = builder.CreateFDiv(b, a, "divtmp");
+  buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
   
   dot = makeBuiltIn("dot");
-  stack = buildPopX(1);
-  Value *opts[] = { fstring, stack.at(0) };
+  a = builder.CreateCall(pop);
+  Value *opts[] = { fstring, a };
   builder.CreateCall(printf_, opts, "printfCall");
   builder.CreateRetVoid();
 
   dup = makeBuiltIn("dup");
-  stack = buildPopX(1);
-  builder.CreateCall(push, stack.at(0));
-  builder.CreateCall(push, stack.at(0));
+  a = buildGetStackValue(TheStack);
+  builder.CreateCall(push, a);
   builder.CreateRetVoid();
 
   builtIns["+"] = add;  // Do forth words even need to correspond to functions?
