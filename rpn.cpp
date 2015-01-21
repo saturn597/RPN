@@ -5,6 +5,9 @@
 #include "llvm/Support/raw_os_ostream.h"
 #include <string>
 
+/* RPN calculator and Forth imitator that compiles to LLVM.
+ * Inspired by http://llvm.org/releases/3.4.2/docs/tutorial/index.html
+ */
 
 //TODO: Take this stuff out of global?
 using namespace llvm;
@@ -67,16 +70,15 @@ static std::string gettok() {
   while (isspace(lastChar))
     lastChar = getchar();
 
-  if (lastChar == EOF) return ""; 
-
   while (!isspace(lastChar)) {
+    if (lastChar == EOF) return ""; 
     tokenString += lastChar;
     lastChar = getchar();
   }
 
   // skip comments -- maybe implement this in forth at some point?
-  if (tokenString == "((") {
-    while (tokenString != "))")
+  if (tokenString == "(") {
+    while (tokenString != ")" && tokenString != "")  // Do I need that EOF check?
       tokenString = gettok();
     return gettok();
   }
@@ -84,10 +86,41 @@ static std::string gettok() {
   return tokenString;
 }
 
+
+
+static std::string curTok;
+std::string getNextToken() {   // Is this needed?
+  return curTok = gettok();
+}
+
+class WordAST {
+// Base class for other words
+public: 
+  virtual ~WordAST() {};  // Why does this destructor need to be declared?
+  virtual void codeGen() = 0;
+};
+
+class NumberAST : public WordAST {
+  double val;
+public:
+  NumberAST(double Val) : val(Val) {}
+  virtual void codeGen();
+};
+
+NumberAST *parseNumber() {
+  double number = strtod(curTok.c_str(), 0);
+ // getNextToken();  // eat the number
+  return new NumberAST(number);
+}
+
+void NumberAST::codeGen() {
+  builder.CreateCall(push, getDouble(val));
+}
+
 void processToken(std::string tokenString) {
 
   if (isdigit(tokenString.front())) {
-    builder.CreateCall(push, getDouble(strtod(tokenString.c_str(), 0)));
+    parseNumber() -> codeGen();
   } else {
     builder.CreateCall(builtIns[tokenString]);  // should check if tokenString is in builtIns first
   }
@@ -310,7 +343,7 @@ int main() {
 
   std::string tokenString;
   
-  while ((tokenString = gettok()) != "") {
+  while ((tokenString = getNextToken()) != "") {
     processToken(tokenString);
   }
 
