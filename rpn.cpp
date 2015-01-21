@@ -2,6 +2,7 @@
 #include <iostream>
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/raw_os_ostream.h"
 #include <string>
 
 
@@ -95,7 +96,7 @@ void processToken(std::string tokenString) {
 
 struct StackItem {
   Value *val;
-  Value *ptr;  // Maybe this type should be stackItemPointer
+  Value *ptr;  // Maybe I should use more specific types where applicable?
 };
 uint64_t stackItemSize;
 
@@ -110,9 +111,11 @@ Value *buildGetStackValue(Value *stackItemPtr) {
 
 void buildSetStackValue(Value *stackItemPtr, Value *newValue) {
   // Generate code to set the value from the stack element pointed to by stackItemPtr
+  
   Value *idx[] = { getInt32(0), getInt32(0) };
   Value *valPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingVal");
   builder.CreateStore(newValue, valPtr);
+
 }
 
 void buildSetStackItem(Value *stackItemPtr, Value *newValue, Value *newPtr) { // maybe stackItemPtr should have the right type
@@ -178,6 +181,7 @@ std::vector<Value *> buildPopX(unsigned short x) {
     x--;
   }
   return result;
+
 }
 
 Function *makeBuiltIn(std::string name) {
@@ -189,6 +193,7 @@ Function *makeBuiltIn(std::string name) {
   BasicBlock *entry = BasicBlock::Create(getGlobalContext(), "entry", f);
   builder.SetInsertPoint(entry);
   return f;
+
 }
 
 int main() {
@@ -218,7 +223,6 @@ int main() {
   printfType = FunctionType::get(int32Ty, int8PointerTy, true);
   printf_ = Function::Create(printfType, Function::ExternalLinkage, "printf", theModule);
 
-
   // Create some useful functions
   FunctionType *pushType = FunctionType::get(voidTy, doubleTy, false);
   push = Function::Create(pushType, Function::ExternalLinkage, "push", theModule);
@@ -239,6 +243,7 @@ int main() {
    
   std::vector<Value *> stack;
 
+  // Generate code for functions corresponding to various forth words.
   add = makeBuiltIn("add");
   Value *a = builder.CreateCall(pop, "poppedForAdd");
   Value *b = buildGetStackValue(TheStack);
@@ -253,8 +258,6 @@ int main() {
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
   
-  // Do I do it like that, or with the more straightforward popping both values?
-
   mul = makeBuiltIn("mul");
   a = builder.CreateCall(pop, "poppedForMul");
   b = buildGetStackValue(TheStack);
@@ -314,7 +317,7 @@ int main() {
   // Create a return for main()
   builder.SetInsertPoint(entryBlock);
   builder.CreateRet(getInt32(0));
-  theModule -> dump();  // Figure out the correct way to do this
+  theModule -> print(*(new raw_os_ostream(std::cout)), 0);  // Figure out the correct way to do this
   
   return 0;
 }
