@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <cstdio>
 #include <iostream>
+#include "llvm/Analysis/Verifier.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_os_ostream.h"
@@ -41,7 +43,9 @@ Function *swa;
 
 Value *fstring;
 
-std::map<std::string, Function *> builtIns;
+std::map<std::string, Function *> words;
+
+BasicBlock *mainEntry;
 
 // TODO: Move the stack management into its own class maybe
 
@@ -82,8 +86,9 @@ static std::string gettok() {
       tokenString = gettok();
     return gettok();
   }
-
-  return tokenString;
+  
+  std::transform(tokenString.begin(), tokenString.end(), tokenString.begin(), ::tolower);
+  return tokenString;  // Maybe should deal with Forth's case insensitivity
 }
 
 
@@ -94,7 +99,7 @@ std::string getNextToken() {   // Is this needed?
 }
 
 class WordAST {
-// Base class for other words
+// Base class for other word types
 public: 
   virtual ~WordAST() {};  // Why does this destructor need to be declared?
   virtual void codeGen() = 0;
@@ -107,22 +112,106 @@ public:
   virtual void codeGen();
 };
 
+class BasicWordAST : public WordAST {
+  std::string name;
+public:
+  BasicWordAST(std::string Name) : name(Name) {}
+  virtual void codeGen();
+};
+
+class DefinitionAST : public WordAST {
+  std::vector<WordAST *> content;
+  std::string name;
+public:
+  DefinitionAST(std::string Name, std::vector<WordAST *> Content) : content(Content), name(Name) {}
+  virtual void codeGen();
+};
+
 NumberAST *parseNumber() {
   double number = strtod(curTok.c_str(), 0);
  // getNextToken();  // eat the number
   return new NumberAST(number);
 }
 
+BasicWordAST *parseBasicWord() {
+  std::string name = curTok;
+  return new BasicWordAST(name);
+}
+
+WordAST *parseToken(std::string tokenString);  // Move this up somewhere
+
+DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs which I think isn't possible in forth
+  getNextToken();  // eat :
+  
+  std::string name = curTok;
+
+  getNextToken();  // eat name
+
+  std::vector<WordAST *> content;
+
+  while (curTok != ";") {
+    if (curTok == "") return 0;  // Premature EOF, ; is omitted. Handle this error better. Currently segfaults.
+    content.push_back(parseToken(curTok));
+    getNextToken();
+  }  
+
+  if (curTok != ";") return 0;  // This shouldn't happen
+
+  return new DefinitionAST(name, content);
+}
+
 void NumberAST::codeGen() {
   builder.CreateCall(push, getDouble(val));
 }
 
-void processToken(std::string tokenString) {
+void BasicWordAST::codeGen() {
+  builder.CreateCall(words[name]);
+}
+
+Function *buildFunction(std::string);  // move this somewhere else
+
+void DefinitionAST::codeGen() {
+
+  Function *f = buildFunction(name);
+
+  unsigned idx = 0;
+  for (std::vector<WordAST *>::iterator w = content.begin(); idx < content.size(); ++w, ++idx) {
+    (*w) -> codeGen();  
+  }  
+
+  builder.CreateRetVoid();
+
+  builder.SetInsertPoint(mainEntry);
+
+  // Add function validation and optimization here, check for conflicting names
+  verifyFunction(*f); 
+
+  words[name] = f; 
+
+}
+
+WordAST *parseToken(std::string tokenString) { 
+
+  if (tokenString == "") {
+    return 0;
+  } else if (isdigit(tokenString.front())) {
+    return parseNumber(); 
+  } else if (tokenString == ":") {
+    return parseDefinition();
+  } else {
+    return parseBasicWord();
+  }
+
+}
+
+void processToken(std::string tokenString) {  // eliminate, this is redundant with parseToken()
 
   if (isdigit(tokenString.front())) {
     parseNumber() -> codeGen();
+  } else if (tokenString == ":") {
+    parseDefinition() -> codeGen();
   } else {
-    builder.CreateCall(builtIns[tokenString]);  // should check if tokenString is in builtIns first
+    builder.CreateCall(words[tokenString]);  // should check if tokenString is in words first
   }
 
 }
@@ -217,7 +306,7 @@ std::vector<Value *> buildPopX(unsigned short x) {
 
 }
 
-Function *makeBuiltIn(std::string name) {
+Function *buildFunction(std::string name) {
   // Return a function with void return type and no parameters, and with builder set to insert into the entry block.
   // Useful for generating our built-in functions.
 
@@ -277,66 +366,66 @@ int main() {
   std::vector<Value *> stack;
 
   // Generate code for functions corresponding to various forth words.
-  add = makeBuiltIn("add");
+  add = buildFunction("add");
   Value *a = builder.CreateCall(pop, "poppedForAdd");
   Value *b = buildGetStackValue(TheStack);
   Value *result = builder.CreateFAdd(a, b, "addtmp");
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
 
-  sub = makeBuiltIn("sub"); 
+  sub = buildFunction("sub"); 
   a = builder.CreateCall(pop, "poppedForSub");
   b = buildGetStackValue(TheStack);
   result = builder.CreateFSub(b, a, "subtmp");
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
   
-  mul = makeBuiltIn("mul");
+  mul = buildFunction("mul");
   a = builder.CreateCall(pop, "poppedForMul");
   b = buildGetStackValue(TheStack);
   result = builder.CreateFMul(b, a, "multmp");
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
   
-  divi = makeBuiltIn("div"); 
+  divi = buildFunction("div"); 
   a = builder.CreateCall(pop, "poppedForMul");
   b = buildGetStackValue(TheStack);
   result = builder.CreateFDiv(b, a, "divtmp");
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
   
-  dot = makeBuiltIn("dot");
+  dot = buildFunction("dot");
   a = builder.CreateCall(pop);
   Value *opts[] = { fstring, a };
   builder.CreateCall(printf_, opts, "printfCall");
   builder.CreateRetVoid();
 
-  dup = makeBuiltIn("dup");
+  dup = buildFunction("dup");
   a = buildGetStackValue(TheStack);
   builder.CreateCall(push, a);
   builder.CreateRetVoid();
 
-  swa = makeBuiltIn("swap");
+  swa = buildFunction("swap");
   StackItem top = buildGetStackItem(TheStack);
   a = buildGetStackValue(top.ptr);
   buildSetStackValue(TheStack, a);
   buildSetStackValue(top.ptr, top.val);
   builder.CreateRetVoid();
 
-  builtIns["+"] = add;  // Do forth words even need to correspond to functions?
-  builtIns["-"] = sub;
-  builtIns["*"] = mul;
-  builtIns["/"] = divi;
+  words["+"] = add;  // Do forth words even need to correspond to functions?
+  words["-"] = sub;
+  words["*"] = mul;
+  words["/"] = divi;
 
-  builtIns["dup"] = dup;  
-  builtIns["."] = dot;
-  builtIns["swap"] = swa;
+  words["dup"] = dup;  
+  words["."] = dot;
+  words["swap"] = swa;
 
   // Insert a main function and an entry block 
   FunctionType *mainType = FunctionType::get(int32Ty, false);
   Function *mainFunction = Function::Create(mainType, Function::ExternalLinkage, "main", theModule);
-  BasicBlock *entryBlock = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
-  builder.SetInsertPoint(entryBlock);
+  mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
+  builder.SetInsertPoint(mainEntry);
 
   DataLayout dl = DataLayout("");
   stackItemSize = dl.getTypeAllocSize(stackItemType);
@@ -348,7 +437,7 @@ int main() {
   }
 
   // Create a return for main()
-  builder.SetInsertPoint(entryBlock);
+  builder.SetInsertPoint(mainEntry);
   builder.CreateRet(getInt32(0));
   theModule -> print(*(new raw_os_ostream(std::cout)), 0);  // Figure out the correct way to do this
   
