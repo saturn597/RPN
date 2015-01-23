@@ -66,29 +66,25 @@ static Value *getDouble(double x) {
 }
 
 static std::string gettok() {
-  char lastChar = ' ';
+  static char lastChar = ' ';
 
   std::string tokenString;
+
+  if (lastChar == EOF) return "";
 
   // skip whitespace
   while (isspace(lastChar))
     lastChar = getchar();
 
-  while (!isspace(lastChar)) {
-    if (lastChar == EOF) return ""; 
+  while (!isspace(lastChar) && lastChar != EOF) {
     tokenString += lastChar;
     lastChar = getchar();
   }
 
-  // skip comments -- maybe implement this in forth at some point?
-  if (tokenString == "(") {
-    while (tokenString != ")" && tokenString != "")  // Do I need that EOF check?
-      tokenString = gettok();
-    return gettok();
-  }
-  
-  std::transform(tokenString.begin(), tokenString.end(), tokenString.begin(), ::tolower);
-  return tokenString;  // Maybe should deal with Forth's case insensitivity
+  // forth is case insensitive, so we should be too
+  std::transform(tokenString.begin(), tokenString.end(), tokenString.begin(), ::tolower); 
+
+  return tokenString;  
 }
 
 
