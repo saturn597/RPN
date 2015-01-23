@@ -47,6 +47,10 @@ std::map<std::string, Function *> words;
 
 BasicBlock *mainEntry;
 
+class WordAST;
+WordAST *parseToken(std::string tokenString);  
+Function *buildFunction(std::string);  
+
 // TODO: Move the stack management into its own class maybe
 
 static Value *getInt64(int x) {
@@ -87,8 +91,6 @@ static std::string gettok() {
   return tokenString;  
 }
 
-
-
 static std::string curTok;
 std::string getNextToken() {   // Is this needed?
   return curTok = gettok();
@@ -123,6 +125,11 @@ public:
   virtual void codeGen();
 };
 
+WordAST *errorP(const char *msg) {
+  fprintf(stderr, "Parser error: %s\n", msg);
+  return 0;
+}
+
 NumberAST *parseNumber() {
   double number = strtod(curTok.c_str(), 0);
  // getNextToken();  // eat the number
@@ -134,8 +141,6 @@ BasicWordAST *parseBasicWord() {
   return new BasicWordAST(name);
 }
 
-WordAST *parseToken(std::string tokenString);  // Move this up somewhere
-
 DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs which I think isn't possible in forth
   getNextToken();  // eat :
   
@@ -146,12 +151,12 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
   std::vector<WordAST *> content;
 
   while (curTok != ";") {
-    if (curTok == "") return 0;  // Premature EOF, ; is omitted. Handle this error better. Currently segfaults.
+    if (curTok == "") return (DefinitionAST *)errorP("; expected");  // eof before end of definition
     content.push_back(parseToken(curTok));
     getNextToken();
   }  
 
-  if (curTok != ";") return 0;  // This shouldn't happen
+  if (curTok != ";") return (DefinitionAST *)errorP("Unexpected error");  // This shouldn't happen
 
   return new DefinitionAST(name, content);
 }
@@ -163,8 +168,6 @@ void NumberAST::codeGen() {
 void BasicWordAST::codeGen() {
   builder.CreateCall(words[name]);
 }
-
-Function *buildFunction(std::string);  // move this somewhere else
 
 void DefinitionAST::codeGen() {
 
@@ -188,26 +191,32 @@ void DefinitionAST::codeGen() {
 
 WordAST *parseToken(std::string tokenString) { 
 
-  if (tokenString == "") {
+  if (tokenString == "") {  // eof
     return 0;
-  } else if (isdigit(tokenString.front())) {
+  } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
     return parseNumber(); 
-  } else if (tokenString == ":") {
+  } else if (tokenString == ":") {  // definition
     return parseDefinition();
-  } else {
+  } else {  // Just a basic word
     return parseBasicWord();
   }
 
 }
 
-void processToken(std::string tokenString) {  // eliminate, this is redundant with parseToken()
+void mainLoop() {
 
-  if (isdigit(tokenString.front())) {
-    parseNumber() -> codeGen();
-  } else if (tokenString == ":") {
-    parseDefinition() -> codeGen();
-  } else {
-    builder.CreateCall(words[tokenString]);  // should check if tokenString is in words first
+  WordAST *nextWord;
+  
+  while (true) {
+    getNextToken();
+    
+    nextWord = parseToken(curTok);
+    
+    if (nextWord == 0) {
+      return;
+    } else {
+      nextWord -> codeGen();
+    }
   }
 
 }
@@ -361,7 +370,7 @@ int main() {
    
   std::vector<Value *> stack;
 
-  // Generate code for functions corresponding to various forth words.
+  // Generate code for functions corresponding to various built in words.
   add = buildFunction("add");
   Value *a = builder.CreateCall(pop, "poppedForAdd");
   Value *b = buildGetStackValue(TheStack);
@@ -426,11 +435,7 @@ int main() {
   DataLayout dl = DataLayout("");
   stackItemSize = dl.getTypeAllocSize(stackItemType);
 
-  std::string tokenString;
-  
-  while ((tokenString = getNextToken()) != "") {
-    processToken(tokenString);
-  }
+  mainLoop(); 
 
   // Create a return for main()
   builder.SetInsertPoint(mainEntry);
