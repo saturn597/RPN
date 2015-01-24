@@ -125,6 +125,14 @@ public:
   virtual void codeGen();
 };
 
+class IfAST : public WordAST {
+  std::vector<WordAST *> thenContent;
+  std::vector<WordAST *> elseContent;
+public:
+  IfAST(std::vector<WordAST *> ThenContent, std::vector<WordAST *> ElseContent) : thenContent(ThenContent), elseContent(ElseContent) {}
+  virtual void codeGen();
+};
+
 WordAST *errorP(const char *msg) {
   fprintf(stderr, "Parser error: %s\n", msg);
   return 0;
@@ -161,6 +169,35 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
   return new DefinitionAST(name, content);
 }
 
+IfAST *parseIf() {
+  
+  std::vector<WordAST *> thenContent;
+  std::vector<WordAST *> elseContent;
+  
+  getNextToken();  // Eat the if
+
+  while (curTok != "else" && curTok != "then") {
+    if (curTok == "") return (IfAST *)errorP("then or else expected");
+    thenContent.push_back(parseToken(curTok));
+    getNextToken();
+  }
+  
+  if (curTok == "then") {
+    return new IfAST(thenContent, elseContent);
+  }
+
+  getNextToken();  // Eat else
+
+  while (curTok != "then") {  // Only happens at all if we hit an else and thus still need to hit the then
+    if (curTok == "") return (IfAST *)errorP("then expected");
+    elseContent.push_back(parseToken(curTok));
+    getNextToken();
+  }
+
+  return new IfAST(thenContent, elseContent);
+
+}
+
 void NumberAST::codeGen() {
   builder.CreateCall(push, getDouble(val));
 }
@@ -169,23 +206,76 @@ void BasicWordAST::codeGen() {
   builder.CreateCall(words[name]);
 }
 
+void codeGenVector(std::vector<WordAST *> content) {
+
+  if (content.empty()) {
+    printf("YES");
+    return;
+  }
+  
+  unsigned idx = 0;
+
+  for (std::vector<WordAST *>::iterator w = content.begin(); idx < content.size(); ++w, ++idx) {
+    (*w) -> codeGen();  
+  }
+
+}
+
 void DefinitionAST::codeGen() {
 
+  BasicBlock *originalBlock = builder.GetInsertBlock();
   Function *f = buildFunction(name);
 
-  unsigned idx = 0;
+  unsigned idx = 0;  // replace what follows with codeGenVector
   for (std::vector<WordAST *>::iterator w = content.begin(); idx < content.size(); ++w, ++idx) {
     (*w) -> codeGen();  
   }  
 
   builder.CreateRetVoid();
 
-  builder.SetInsertPoint(mainEntry);
+  builder.SetInsertPoint(originalBlock);
 
   // Add function validation and optimization here, check for conflicting names
   verifyFunction(*f); 
 
   words[name] = f; 
+
+}
+
+void IfAST::codeGen() {
+
+  Value *cond = builder.CreateFCmpONE(buildPop(), getDouble(0.0), "ifCond");  // should buildPop be a call to pop instead?
+  Function *currentFunction = builder.GetInsertBlock() -> getParent();
+
+  BasicBlock *thenBB = BasicBlock::Create(getGlobalContext(), "then", currentFunction);
+  BasicBlock *elseBB = BasicBlock::Create(getGlobalContext(), "else");
+  BasicBlock *mergeBB = BasicBlock::Create(getGlobalContext(), "merge");
+
+  builder.CreateCondBr(cond, thenBB, elseBB);
+
+  builder.SetInsertPoint(thenBB);
+ 
+  for (unsigned idx = 0; idx < thenContent.size(); ++idx) {
+    thenContent.at(idx) -> codeGen();
+  }
+  /*
+  unsigned idx = 0;  // replace what follows with codeGenVector
+  for (std::vector<WordAST *>::iterator w = thenContent.begin(); idx < thenContent.size(); ++w, ++idx) {
+    //(*w) -> codeGen();  
+  } */ 
+
+  builder.CreateBr(mergeBB);
+
+  currentFunction -> getBasicBlockList().push_back(elseBB);  // why can't this happen above?
+  builder.SetInsertPoint(elseBB);
+  for (unsigned idx = 0; idx < elseContent.size(); ++idx) {
+    elseContent.at(idx) -> codeGen();
+  }
+  //codeGenVector(elseContent);
+  builder.CreateBr(mergeBB);
+
+  currentFunction -> getBasicBlockList().push_back(mergeBB);  // why can't this happen above?
+  builder.SetInsertPoint(mergeBB);
 
 }
 
@@ -197,6 +287,8 @@ WordAST *parseToken(std::string tokenString) {
     return parseNumber(); 
   } else if (tokenString == ":") {  // definition
     return parseDefinition();
+  } else if (tokenString == "if") {  // if
+    return parseIf();
   } else {  // Just a basic word
     return parseBasicWord();
   }
@@ -438,7 +530,6 @@ int main() {
   mainLoop(); 
 
   // Create a return for main()
-  builder.SetInsertPoint(mainEntry);
   builder.CreateRet(getInt32(0));
   theModule -> print(*(new raw_os_ostream(std::cout)), 0);  // Figure out the correct way to do this
   
