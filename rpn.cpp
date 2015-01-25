@@ -66,6 +66,8 @@ class WordAST;
 WordAST *parseToken(std::string tokenString);  
 Function *buildFunction(std::string);  
 
+WordAST *parseToken(std::string tokenString);
+
 // TODO: Move the stack management into its own class maybe
 
 static Value *getInt64(int x) {
@@ -213,6 +215,19 @@ IfAST *parseIf() {
 
 }
 
+WordAST *parseComment() {
+
+  while (curTok != ")") {
+    getNextToken();
+    if (curTok == "") return errorP(") expected");
+  }
+  
+  getNextToken();  // eat )
+
+  return parseToken(curTok);
+
+}
+
 void NumberAST::codeGen() {
   builder.CreateCall(push, getDouble(val));
 }
@@ -280,6 +295,8 @@ WordAST *parseToken(std::string tokenString) {
 
   if (tokenString == "") {  // eof
     return 0;
+  } else if (tokenString == "(") {
+    return parseComment();
   } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
     return parseNumber(); 
   } else if (tokenString == ":") {  // definition
