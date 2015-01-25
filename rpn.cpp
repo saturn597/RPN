@@ -49,6 +49,8 @@ Function *drop;
 Function *dup;
 Function *over;
 Function *swa;
+Function *nip;
+Function *tuck;
 
 Function *dot;
 Function *dotS;
@@ -340,6 +342,15 @@ Value *buildGetStackPointer(Value *stackItemPtr) {
 
 }
 
+Value *buildSetStackPointer(Value *stackItemPtr, Value *newPtr) {
+  // Generate code to set the pointer of the stack element pointed to by stackItemPtr
+  
+ Value *idx[] = { getInt32(0), getInt32(1) }; 
+ Value *ptrPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingPtr");
+ return builder.CreateStore(newPtr, ptrPtr);
+
+}
+
 void buildSetStackItem(Value *stackItemPtr, Value *newValue, Value *newPtr) { // maybe stackItemPtr should have the right type
   // Generate code to set the fields of a stack item structure
   
@@ -544,7 +555,23 @@ int main() {
   a = buildGetStackValue(buildGetStackPointer(TheStack));
   builder.CreateCall(push, a);
   builder.CreateRetVoid();
- 
+
+  nip = buildFunction("nip"); 
+  Value *nipped = buildGetStackPointer(TheStack); 
+  Value *castNipped = builder.CreateBitCast(nipped, PointerType::get(Type::getInt8Ty(getGlobalContext()), 0));
+  buildSetStackPointer(TheStack, buildGetStackPointer(nipped));
+  builder.CreateCall(free_, castNipped);
+  builder.CreateRetVoid();
+
+  tuck = buildFunction("tuck");
+  StackItem tucksTop = buildGetStackItem(TheStack);  // Can I generalize this and use it in multiple functions?
+  Value *nextDownsPtr = buildGetStackPointer(tucksTop.ptr);
+  Value *voidPtr = builder.CreateCall(malloc_, getInt64(stackItemSize), "mallocResult");
+  Value *newItemPtr = builder.CreateBitCast(voidPtr, stackItemPointerType, "newStackItem");
+  buildSetStackItem(newItemPtr, top.val, nextDownsPtr); 
+  buildSetStackPointer(tucksTop.ptr, newItemPtr); 
+  builder.CreateRetVoid();
+
   dot = buildFunction("dot");
   a = builder.CreateCall(pop);
   Value *dotPrintfOpts[] = { fstring, a };  // Maybe make this more general so I can use it in building other functions
@@ -583,9 +610,12 @@ int main() {
   words["="] = eq;
   
   words["negate"] = negate;
+
   words["drop"] = drop;
   words["dup"] = dup;
   words["over"] = over;
+  words["nip"] = nip;
+  words["tuck"] = tuck;
 
   words["."] = dot;
   words[".s"] = dotS;
