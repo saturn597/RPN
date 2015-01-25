@@ -4,7 +4,9 @@
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/PassManager.h"
 #include "llvm/Support/raw_os_ostream.h"
+#include "llvm/Transforms/Scalar.h"
 #include <string>
 
 /* RPN calculator and Forth imitator that compiles to LLVM.
@@ -36,14 +38,18 @@ Function *push;
 Function *add;
 Function *sub;
 Function *mul;
+Function *divi;
+
 Function *lt;
 Function *gt;
 Function *eq;
 
-Function *divi;
-Function *dot;
+Function *drop;
 Function *dup;
+Function *over;
 Function *swa;
+
+Function *dot;
 
 Value *fstring;
 
@@ -89,7 +95,7 @@ static std::string gettok() {
     lastChar = getchar();
   }
 
-  // forth is case insensitive, so we should be too
+  // forth is case insensitive, so let's be case insensitive
   std::transform(tokenString.begin(), tokenString.end(), tokenString.begin(), ::tolower); 
 
   return tokenString;  
@@ -323,6 +329,15 @@ void buildSetStackValue(Value *stackItemPtr, Value *newValue) {
 
 }
 
+Value *buildGetStackPointer(Value *stackItemPtr) {
+  // Given a pointer to a stack item, return the pointer to the next item down the stack
+  
+ Value *idx[] = { getInt32(0), getInt32(1) }; 
+ Value *ptrPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingPtr");
+ return builder.CreateLoad(ptrPtr, "ptr");
+
+}
+
 void buildSetStackItem(Value *stackItemPtr, Value *newValue, Value *newPtr) { // maybe stackItemPtr should have the right type
   // Generate code to set the fields of a stack item structure
   
@@ -500,12 +515,6 @@ int main() {
   result = builder.CreateFMul(result, getDouble(-1.0));  // Forth "true" results are -1
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
-  
-  dot = buildFunction("dot");
-  a = builder.CreateCall(pop);
-  Value *opts[] = { fstring, a };
-  builder.CreateCall(printf_, opts, "printfCall");
-  builder.CreateRetVoid();
 
   dup = buildFunction("dup");
   a = buildGetStackValue(TheStack);
@@ -519,6 +528,25 @@ int main() {
   buildSetStackValue(top.ptr, top.val);
   builder.CreateRetVoid();
 
+  drop = buildFunction("drop");
+  builder.CreateCall(pop);
+  builder.CreateRetVoid();
+
+  over = buildFunction("over");
+  a = buildGetStackValue(buildGetStackPointer(TheStack));
+  builder.CreateCall(push, a);
+  builder.CreateRetVoid();
+ 
+  dot = buildFunction("dot");
+  a = builder.CreateCall(pop);
+  Value *opts[] = { fstring, a };
+  builder.CreateCall(printf_, opts, "printfCall");
+  builder.CreateRetVoid();
+
+  dotS = buildFunction("dotS");
+  // fill this in
+  builder.CreateRetVoid();
+
   words["+"] = add;  // Do forth words even need to correspond to functions?
   words["-"] = sub;
   words["*"] = mul;
@@ -527,9 +555,11 @@ int main() {
   words[">"] = gt;
   words["="] = eq;
 
-  words["dup"] = dup;  
-  words["."] = dot;
+  words["drop"] = drop;
+  words["dup"] = dup;
+  words["over"] = over;
   words["swap"] = swa;
+  words["."] = dot;
 
   // Insert a main function and an entry block 
   FunctionType *mainType = FunctionType::get(int32Ty, false);
@@ -544,6 +574,11 @@ int main() {
 
   // Create a return for main()
   builder.CreateRet(getInt32(0));
+
+
+  /*static FunctionPassManager *ThePM;
+  ThePM -> add(createCFGSimplificationPass());*/
+
   theModule -> print(*(new raw_os_ostream(std::cout)), 0);  // Figure out the correct way to do this
   
   return 0;
