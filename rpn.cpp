@@ -39,6 +39,7 @@ Function *add;
 Function *sub;
 Function *mul;
 Function *divi;
+Function *negate;
 
 Function *lt;
 Function *gt;
@@ -493,6 +494,12 @@ int main() {
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
 
+  negate = buildFunction("negate");
+  a = buildGetStackValue(TheStack);
+  result = builder.CreateFNeg(a, "negtmp"); 
+  buildSetStackValue(TheStack, result);
+  builder.CreateRetVoid();
+
   lt = buildFunction("lt");
   a = builder.CreateCall(pop, "poppedForLt");
   b = buildGetStackValue(TheStack);
@@ -574,7 +581,8 @@ int main() {
   words["<"] = lt;
   words[">"] = gt;
   words["="] = eq;
-
+  
+  words["negate"] = negate;
   words["drop"] = drop;
   words["dup"] = dup;
   words["over"] = over;
