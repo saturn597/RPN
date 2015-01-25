@@ -208,15 +208,8 @@ void BasicWordAST::codeGen() {
 
 void codeGenVector(std::vector<WordAST *> content) {
 
-  if (content.empty()) {
-    printf("YES");
-    return;
-  }
-  
-  unsigned idx = 0;
-
-  for (std::vector<WordAST *>::iterator w = content.begin(); idx < content.size(); ++w, ++idx) {
-    (*w) -> codeGen();  
+  for (unsigned idx = 0; idx < content.size(); ++idx) {
+    content.at(idx) -> codeGen();
   }
 
 }
@@ -226,10 +219,7 @@ void DefinitionAST::codeGen() {
   BasicBlock *originalBlock = builder.GetInsertBlock();
   Function *f = buildFunction(name);
 
-  unsigned idx = 0;  // replace what follows with codeGenVector
-  for (std::vector<WordAST *>::iterator w = content.begin(); idx < content.size(); ++w, ++idx) {
-    (*w) -> codeGen();  
-  }  
+  codeGenVector(content);  
 
   builder.CreateRetVoid();
 
@@ -250,29 +240,21 @@ void IfAST::codeGen() {
   BasicBlock *thenBB = BasicBlock::Create(getGlobalContext(), "then", currentFunction);
   BasicBlock *elseBB = BasicBlock::Create(getGlobalContext(), "else");
   BasicBlock *mergeBB = BasicBlock::Create(getGlobalContext(), "merge");
+  
+  if (elseContent.size() == 0) elseBB = mergeBB;  // If we don't have an else branch
 
   builder.CreateCondBr(cond, thenBB, elseBB);
 
   builder.SetInsertPoint(thenBB);
- 
-  for (unsigned idx = 0; idx < thenContent.size(); ++idx) {
-    thenContent.at(idx) -> codeGen();
-  }
-  /*
-  unsigned idx = 0;  // replace what follows with codeGenVector
-  for (std::vector<WordAST *>::iterator w = thenContent.begin(); idx < thenContent.size(); ++w, ++idx) {
-    //(*w) -> codeGen();  
-  } */ 
-
+  codeGenVector(thenContent); 
   builder.CreateBr(mergeBB);
 
-  currentFunction -> getBasicBlockList().push_back(elseBB);  // why can't this happen above?
-  builder.SetInsertPoint(elseBB);
-  for (unsigned idx = 0; idx < elseContent.size(); ++idx) {
-    elseContent.at(idx) -> codeGen();
+  if (elseContent.size() > 0) {  // If we do have an else branch
+    currentFunction -> getBasicBlockList().push_back(elseBB);
+    builder.SetInsertPoint(elseBB);
+    codeGenVector(elseContent);
+    builder.CreateBr(mergeBB);
   }
-  //codeGenVector(elseContent);
-  builder.CreateBr(mergeBB);
 
   currentFunction -> getBasicBlockList().push_back(mergeBB);  // why can't this happen above?
   builder.SetInsertPoint(mergeBB);
