@@ -36,6 +36,10 @@ Function *push;
 Function *add;
 Function *sub;
 Function *mul;
+Function *lt;
+Function *gt;
+Function *eq;
+
 Function *divi;
 Function *dot;
 Function *dup;
@@ -472,6 +476,30 @@ int main() {
   result = builder.CreateFDiv(b, a, "divtmp");
   buildSetStackValue(TheStack, result);
   builder.CreateRetVoid();
+
+  lt = buildFunction("lt");
+  a = builder.CreateCall(pop, "poppedForLt");
+  b = buildGetStackValue(TheStack);
+  result = builder.CreateUIToFP(builder.CreateFCmpULT(b, a, "lttmp"), Type::getDoubleTy(getGlobalContext()), "lttmpdbl");
+  result = builder.CreateFMul(result, getDouble(-1.0));  // Forth "true" results are -1
+  buildSetStackValue(TheStack, result);
+  builder.CreateRetVoid();
+
+  gt = buildFunction("gt");
+  a = builder.CreateCall(pop, "poppedForGt");
+  b = buildGetStackValue(TheStack); 
+  result = builder.CreateUIToFP(builder.CreateFCmpUGT(b, a, "gttmp"), Type::getDoubleTy(getGlobalContext()), "gttmpdbl");
+  result = builder.CreateFMul(result, getDouble(-1.0));  // Forth "true" results are -1
+  buildSetStackValue(TheStack, result);
+  builder.CreateRetVoid();
+
+  eq = buildFunction("eq");
+  a = builder.CreateCall(pop, "poppedForEq");
+  b = buildGetStackValue(TheStack);
+  result = builder.CreateUIToFP(builder.CreateFCmpOEQ(b, a, "eqtmp"), Type::getDoubleTy(getGlobalContext()), "eqtmpdbl"); 
+  result = builder.CreateFMul(result, getDouble(-1.0));  // Forth "true" results are -1
+  buildSetStackValue(TheStack, result);
+  builder.CreateRetVoid();
   
   dot = buildFunction("dot");
   a = builder.CreateCall(pop);
@@ -495,6 +523,9 @@ int main() {
   words["-"] = sub;
   words["*"] = mul;
   words["/"] = divi;
+  words["<"] = lt;
+  words[">"] = gt;
+  words["="] = eq;
 
   words["dup"] = dup;  
   words["."] = dot;
