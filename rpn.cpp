@@ -51,6 +51,7 @@ Function *over;
 Function *swa;
 Function *nip;
 Function *tuck;
+Function *rot;
 
 Function *dot;
 Function *dotS;
@@ -572,6 +573,15 @@ int main() {
   buildSetStackPointer(tucksTop.ptr, newItemPtr); 
   builder.CreateRetVoid();
 
+  rot = buildFunction("rot");
+  StackItem rotsTop = buildGetStackItem(TheStack);  // 3 -> 1 
+  StackItem rotsNext = buildGetStackItem(rotsTop.ptr);  // 2 -> 3
+  Value *rotsBottomVal = buildGetStackValue(rotsNext.ptr); // 1 -> 2
+  buildSetStackValue(TheStack, rotsBottomVal);
+  buildSetStackValue(rotsTop.ptr, rotsTop.val); 
+  buildSetStackValue(rotsNext.ptr, rotsNext.val);
+  builder.CreateRetVoid();
+
   dot = buildFunction("dot");
   a = builder.CreateCall(pop);
   Value *dotPrintfOpts[] = { fstring, a };  // Maybe make this more general so I can use it in building other functions
@@ -616,6 +626,7 @@ int main() {
   words["over"] = over;
   words["nip"] = nip;
   words["tuck"] = tuck;
+  words["rot"] = rot;
 
   words["."] = dot;
   words[".s"] = dotS;
