@@ -50,6 +50,7 @@ Function *over;
 Function *swa;
 
 Function *dot;
+Function *dotS;
 
 Value *fstring;
 
@@ -539,12 +540,31 @@ int main() {
  
   dot = buildFunction("dot");
   a = builder.CreateCall(pop);
-  Value *opts[] = { fstring, a };
-  builder.CreateCall(printf_, opts, "printfCall");
+  Value *dotPrintfOpts[] = { fstring, a };  // Maybe make this more general so I can use it in building other functions
+  builder.CreateCall(printf_, dotPrintfOpts, "printfCall");
   builder.CreateRetVoid();
 
-  dotS = buildFunction("dotS");
-  // fill this in
+  dotS = buildFunction("dotS");  // Forth .s prints out the stack in LILO order, this is LIFO - fix?
+  BasicBlock *entry = builder.GetInsertBlock();  // could this replace one of the below?
+  BasicBlock *checkBlock = BasicBlock::Create(getGlobalContext(), "checkBlock", dotS);
+  BasicBlock *finishedBlock = BasicBlock::Create(getGlobalContext(), "loopFinished", dotS);
+  BasicBlock *unfinishedBlock = BasicBlock::Create(getGlobalContext(), "loopUnfinished", dotS);
+  builder.CreateBr(checkBlock);
+
+  builder.SetInsertPoint(checkBlock);
+  PHINode *p = builder.CreatePHI(stackItemPointerType, 2, "phi");
+  p -> addIncoming(TheStack, entry);
+  StackItem currentItem = buildGetStackItem(p);
+  p -> addIncoming(currentItem.ptr, unfinishedBlock);
+  Value *cond = builder.CreateIsNull(currentItem.ptr, "isItemNull");
+  builder.CreateCondBr(cond, finishedBlock, unfinishedBlock);
+  
+  builder.SetInsertPoint(unfinishedBlock);
+  Value *dotSPrintfOpts[] = { fstring, currentItem.val };
+  builder.CreateCall(printf_, dotSPrintfOpts, "printfCall");
+  builder.CreateBr(checkBlock);
+
+  builder.SetInsertPoint(finishedBlock); 
   builder.CreateRetVoid();
 
   words["+"] = add;  // Do forth words even need to correspond to functions?
@@ -558,8 +578,9 @@ int main() {
   words["drop"] = drop;
   words["dup"] = dup;
   words["over"] = over;
-  words["swap"] = swa;
+
   words["."] = dot;
+  words[".s"] = dotS;
 
   // Insert a main function and an entry block 
   FunctionType *mainType = FunctionType::get(int32Ty, false);
