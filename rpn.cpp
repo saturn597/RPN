@@ -60,7 +60,9 @@ Value *fstring;
 
 std::map<std::string, Function *> words;
 
-BasicBlock *mainEntry;
+uint64_t stackItemSize;
+
+bool errors = false;  // Should I be using exceptions maybe?
 
 class WordAST;
 WordAST *parseToken(std::string tokenString);  
@@ -152,6 +154,7 @@ public:
 
 WordAST *errorP(const char *msg) {
   fprintf(stderr, "Parser error: %s\n", msg);
+  errors = true;
   return 0;
 }
 
@@ -293,7 +296,12 @@ void IfAST::codeGen() {
 
 WordAST *parseToken(std::string tokenString) { 
 
-  if (tokenString == "") {  // eof
+  if (words.count(tokenString) == 1) { 
+    // Just a basic word
+    // Currently I essentially search words for tokenString twice - once here and once when constructing the AST - fix?
+    // Does this allow EOF shenannigans? Should I check EOF first?
+    return parseBasicWord();
+  } else if (tokenString == "") {  // eof
     return 0;
   } else if (tokenString == "(") {
     return parseComment();
@@ -303,9 +311,10 @@ WordAST *parseToken(std::string tokenString) {
     return parseDefinition();
   } else if (tokenString == "if") {  // if
     return parseIf();
-  } else {  // Just a basic word
-    return parseBasicWord();
   }
+  
+  std::string errorMsg = "Unknown word \"" + tokenString + "\"";
+  return errorP(errorMsg.c_str());
 
 }
 
@@ -331,7 +340,6 @@ struct StackItem {
   Value *val;
   Value *ptr;  // Maybe I should use more specific types where applicable?
 };
-uint64_t stackItemSize;
 
 Value *buildGetStackValue(Value *stackItemPtr) {
   // Generate code to get the value from the stack element pointed to by stackItemPtr
@@ -651,13 +659,14 @@ int main() {
   // Insert a main function and an entry block 
   FunctionType *mainType = FunctionType::get(int32Ty, false);
   Function *mainFunction = Function::Create(mainType, Function::ExternalLinkage, "main", theModule);
-  mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
+  BasicBlock *mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
   builder.SetInsertPoint(mainEntry);
 
   DataLayout dl = DataLayout("");
   stackItemSize = dl.getTypeAllocSize(stackItemType);
 
   mainLoop(); 
+  if (errors) return 1;
 
   // Create a return for main()
   builder.CreateRet(getInt32(0));
