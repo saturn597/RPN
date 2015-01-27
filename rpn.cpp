@@ -35,20 +35,22 @@ GlobalVariable *TheStack;
 
 Function *pop;
 Function *push;
+
 Function *add;
 Function *sub;
 Function *mul;
 Function *divi;
+
 Function *negate;
 
 Function *lt;
 Function *gt;
 Function *eq;
 
-Function *drop;
 Function *dup;
-Function *over;
 Function *swa;
+Function *drop;
+Function *over;
 Function *nip;
 Function *tuck;
 Function *rot;
@@ -59,6 +61,7 @@ Function *dotS;
 Value *fstring;
 
 std::map<std::string, Function *> words;
+std::map<std::string, Value *> currentLocals;
 
 uint64_t stackItemSize;
 
@@ -139,8 +142,9 @@ public:
 class DefinitionAST : public WordAST {
   std::vector<WordAST *> content;
   std::string name;
+  std::vector<std::string> locals;
 public:
-  DefinitionAST(std::string Name, std::vector<WordAST *> Content) : content(Content), name(Name) {}
+  DefinitionAST(std::string Name, std::vector<std::string> Locals, std::vector<WordAST *> Content) : name(Name), locals(Locals), content(Content) {}
   virtual void codeGen();
 };
 
@@ -151,6 +155,13 @@ public:
   IfAST(std::vector<WordAST *> ThenContent, std::vector<WordAST *> ElseContent) : thenContent(ThenContent), elseContent(ElseContent) {}
   virtual void codeGen();
 };
+
+class LocalRefAST : public WordAST {
+  std::string name;
+public:
+  LocalRefAST(std::string Name) : name(Name) {};
+  virtual void codeGen();
+};  // maybe merge this class with BasicWord
 
 WordAST *errorP(const char *msg) {
   fprintf(stderr, "Parser error: %s\n", msg);
@@ -176,17 +187,34 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
 
   getNextToken();  // eat name
 
+  std::vector<std::string> locals;  // maybe use std::set for this because I'm mostly searching it and don't want dupes -- but I care about order
+  
+  if (curTok == "{") {
+    // word has locals
+    getNextToken();  // eat {
+    while (curTok != "}") {
+      if (curTok == "") return (DefinitionAST *)errorP("} expected");  // eof before end of locals definition
+      locals.push_back(curTok);  // report on duplicates?
+      getNextToken();
+    } 
+    getNextToken();  // eat }
+  }
+
   std::vector<WordAST *> content;
 
   while (curTok != ";") {
     if (curTok == "") return (DefinitionAST *)errorP("; expected");  // eof before end of definition
-    content.push_back(parseToken(curTok));
+    if (std::find(locals.begin(), locals.end(), curTok) != locals.end()) {  // word is a local
+      content.push_back(new LocalRefAST(curTok));
+    } else {  // if word is not a local
+      content.push_back(parseToken(curTok));
+    }
     getNextToken();
   }  
 
-  if (curTok != ";") return (DefinitionAST *)errorP("Unexpected error");  // This shouldn't happen
+  if (curTok != ";") return (DefinitionAST *)errorP("Unexpected error");  // This shouldn't happen  -- maybe remove this line
 
-  return new DefinitionAST(name, content);
+  return new DefinitionAST(name, locals, content);
 }
 
 IfAST *parseIf() {
@@ -239,6 +267,10 @@ void BasicWordAST::codeGen() {
   builder.CreateCall(words[name]);
 }
 
+void LocalRefAST::codeGen() {
+  buildPush(builder.CreateLoad(currentLocals[name]));
+}
+
 void codeGenVector(std::vector<WordAST *> content) {
 
   for (unsigned idx = 0; idx < content.size(); ++idx) {
@@ -251,6 +283,12 @@ void DefinitionAST::codeGen() {
 
   BasicBlock *originalBlock = builder.GetInsertBlock();
   Function *f = buildFunction(name);
+ 
+  unsigned idx;
+  for (std::vector<std::string>::reverse_iterator i = locals.rbegin(); i != locals.rend(); ++i) {
+    currentLocals[*i] = builder.CreateAlloca(Type::getDoubleTy(getGlobalContext()));
+    builder.CreateStore(buildPop(), currentLocals[*i]); 
+  }
 
   codeGenVector(content);  
 
@@ -262,6 +300,8 @@ void DefinitionAST::codeGen() {
   verifyFunction(*f); 
 
   words[name] = f; 
+
+  currentLocals.clear();
 
 }
 
@@ -640,14 +680,16 @@ int main() {
   words["-"] = sub;
   words["*"] = mul;
   words["/"] = divi;
+
+  words["negate"] = negate;
+
   words["<"] = lt;
   words[">"] = gt;
   words["="] = eq;
   
-  words["negate"] = negate;
-
-  words["drop"] = drop;
   words["dup"] = dup;
+  words["swap"] = swa;
+  words["drop"] = drop;
   words["over"] = over;
   words["nip"] = nip;
   words["tuck"] = tuck;
