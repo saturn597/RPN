@@ -1,13 +1,20 @@
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
+#include <sstream>
 #include "llvm/Analysis/Verifier.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/JIT.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/PassManager.h"
 #include "llvm/Support/raw_os_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Support/TargetSelect.h"
 #include <string>
+
+// TODO: be consistent between calling buildPop versus buildCall(pop) - and likewise for push
+// Also, fix ordering of AST and parser definitions so it's consistent (maybe base it on parseToken's ordering) 
 
 /* RPN calculator and Forth imitator that compiles to LLVM.
  * Inspired by http://llvm.org/releases/3.4.2/docs/tutorial/index.html
@@ -22,6 +29,9 @@ Value* buildPop();
 LLVMContext &context = getGlobalContext();
 static Module *theModule = new Module("rpn", context); 
 static IRBuilder<> builder(context);
+
+bool JITMode = true;
+static ExecutionEngine *TheExecutionEngine;
 
 StructType *stackItemType; 
 PointerType *stackItemPointerType;
@@ -236,7 +246,7 @@ IfAST *parseIf() {
 
   getNextToken();  // Eat else
 
-  while (curTok != "then") {  // Only happens at all if we hit an else and thus still need to hit the then
+  while (curTok != "then") {  // If we haven't already hit a then, need to keep going
     if (curTok == "") return (IfAST *)errorP("then expected");
     elseContent.push_back(parseToken(curTok));
     getNextToken();
@@ -271,7 +281,8 @@ void LocalRefAST::codeGen() {
   buildPush(builder.CreateLoad(currentLocals[name]));
 }
 
-void codeGenVector(std::vector<WordAST *> content) {
+void codeGenMultiple(std::vector<WordAST *> content) {
+  // Generate code for multiple words in sequence
 
   for (unsigned idx = 0; idx < content.size(); ++idx) {
     content.at(idx) -> codeGen();
@@ -290,7 +301,7 @@ void DefinitionAST::codeGen() {
     builder.CreateStore(buildPop(), currentLocals[*i]); 
   }
 
-  codeGenVector(content);  
+  codeGenMultiple(content);  
 
   builder.CreateRetVoid();
 
@@ -311,25 +322,27 @@ void IfAST::codeGen() {
   Function *currentFunction = builder.GetInsertBlock() -> getParent();
 
   BasicBlock *thenBB = BasicBlock::Create(getGlobalContext(), "then", currentFunction);
-  BasicBlock *elseBB = BasicBlock::Create(getGlobalContext(), "else");
-  BasicBlock *mergeBB = BasicBlock::Create(getGlobalContext(), "merge");
+  BasicBlock *mergeBB = BasicBlock::Create(getGlobalContext(), "merge", currentFunction);
+  BasicBlock *elseBB = BasicBlock::Create(getGlobalContext(), "else", currentFunction);
   
-  if (elseContent.size() == 0) elseBB = mergeBB;  // If we don't have an else branch
-
-  builder.CreateCondBr(cond, thenBB, elseBB);
+  if (elseContent.size() == 0) {
+    // If we don't have an else, we just want to branch straight to the mergeBB when the cond is false
+    builder.CreateCondBr(cond, thenBB, mergeBB);
+  } else {
+    // Otherwise, we need to branch to else's BB
+    builder.CreateCondBr(cond, thenBB, elseBB);
+  }
 
   builder.SetInsertPoint(thenBB);
-  codeGenVector(thenContent); 
+  codeGenMultiple(thenContent); 
   builder.CreateBr(mergeBB);
 
   if (elseContent.size() > 0) {  // If we do have an else branch
-    currentFunction -> getBasicBlockList().push_back(elseBB);
     builder.SetInsertPoint(elseBB);
-    codeGenVector(elseContent);
+    codeGenMultiple(elseContent);
     builder.CreateBr(mergeBB);
   }
 
-  currentFunction -> getBasicBlockList().push_back(mergeBB);  // why can't this happen above?
   builder.SetInsertPoint(mergeBB);
 
 }
@@ -343,7 +356,7 @@ WordAST *parseToken(std::string tokenString) {
     return parseBasicWord();
   } else if (tokenString == "") {  // eof
     return 0;
-  } else if (tokenString == "(") {
+  } else if (tokenString == "(") {  // beginning of a comment
     return parseComment();
   } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
     return parseNumber(); 
@@ -358,19 +371,30 @@ WordAST *parseToken(std::string tokenString) {
 
 }
 
+void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single word
+    Function *F = buildFunction("");  // create anonymous function to run the current word
+    node -> codeGen();
+    builder.CreateRetVoid();
+    void *FPtr = TheExecutionEngine->getPointerToFunction(F);
+    void (*FP)() = (void (*)())(intptr_t)FPtr;  // look into how this works
+    FP();
+}
+
 void mainLoop() {
 
-  WordAST *nextWord;
+  WordAST *nextASTNode;
   
   while (true) {
     getNextToken();
     
-    nextWord = parseToken(curTok);
+    nextASTNode = parseToken(curTok);
     
-    if (nextWord == 0) {
+    if (nextASTNode == 0) {
       return;
+    } else if (JITMode) {
+      JITASTNode(nextASTNode); 
     } else {
-      nextWord -> codeGen();
+      nextASTNode -> codeGen();
     }
   }
 
@@ -496,6 +520,7 @@ Function *buildFunction(std::string name) {
 }
 
 int main() {
+  InitializeNativeTarget(); 
 
   // Set up useful types
   // TODO: Maybe declare other types here to shorten the function declarations
@@ -698,26 +723,44 @@ int main() {
   words["."] = dot;
   words[".s"] = dotS;
 
-  // Insert a main function and an entry block 
-  FunctionType *mainType = FunctionType::get(int32Ty, false);
-  Function *mainFunction = Function::Create(mainType, Function::ExternalLinkage, "main", theModule);
-  BasicBlock *mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
-  builder.SetInsertPoint(mainEntry);
-
   DataLayout dl = DataLayout("");
   stackItemSize = dl.getTypeAllocSize(stackItemType);
 
-  mainLoop(); 
+  if (JITMode) {
+    // if we're JITing, we need to set up an execution engine
+    
+    std::string ErrStr;
+    TheExecutionEngine = EngineBuilder(theModule).setErrorStr(&ErrStr).create();
+    
+    if (!TheExecutionEngine) {
+      fprintf(stderr, "Could not create ExecutionEngine: %s\n", ErrStr.c_str());
+      exit(1);
+    }
+
+    mainLoop();
+
+  } else {
+    // if we're not JITing, then we need to wrap our generated code in a main function
+    
+    // Insert a main function and an entry block 
+    FunctionType *mainType = FunctionType::get(int32Ty, false);
+    Function *mainFunction = Function::Create(mainType, Function::ExternalLinkage, "main", theModule);
+    BasicBlock *mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
+    builder.SetInsertPoint(mainEntry);
+
+    mainLoop(); 
+
+    // Create a return for main function
+    builder.CreateRet(getInt32(0));
+
+  }
+
   if (errors) return 1;
-
-  // Create a return for main()
-  builder.CreateRet(getInt32(0));
-
 
   /*static FunctionPassManager *ThePM;
   ThePM -> add(createCFGSimplificationPass());*/
 
   theModule -> print(*(new raw_os_ostream(std::cout)), 0);  // Figure out the correct way to do this
-  
+
   return 0;
 }
