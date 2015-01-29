@@ -158,6 +158,11 @@ public:
   virtual void codeGen();
 };
 
+class RecurseAST : public WordAST {
+  public:
+    virtual void codeGen();
+};
+
 class IfAST : public WordAST {
   std::vector<WordAST *> thenContent;
   std::vector<WordAST *> elseContent;
@@ -290,9 +295,17 @@ void codeGenMultiple(std::vector<WordAST *> content) {
 
 }
 
+void RecurseAST::codeGen() {
+  // This might be a little weird - calling recurse on the top level in real forth results in "Interpreting a compile-only word" error
+  // In ours will it call the anonymous function we're JITing to?
+  Function *currentFunction = builder.GetInsertBlock() -> getParent();
+  builder.CreateCall(currentFunction); 
+}
+
 void DefinitionAST::codeGen() {
 
   BasicBlock *originalBlock = builder.GetInsertBlock();
+
   Function *f = buildFunction(name);
  
   unsigned idx;
@@ -305,14 +318,14 @@ void DefinitionAST::codeGen() {
 
   builder.CreateRetVoid();
 
-  builder.SetInsertPoint(originalBlock);
-
   // Add function validation and optimization here, check for conflicting names
   verifyFunction(*f); 
 
   words[name] = f; 
 
   currentLocals.clear();
+
+  builder.SetInsertPoint(originalBlock);
 
 }
 
@@ -323,13 +336,14 @@ void IfAST::codeGen() {
 
   BasicBlock *thenBB = BasicBlock::Create(getGlobalContext(), "then", currentFunction);
   BasicBlock *mergeBB = BasicBlock::Create(getGlobalContext(), "merge", currentFunction);
-  BasicBlock *elseBB = BasicBlock::Create(getGlobalContext(), "else", currentFunction);
+  BasicBlock *elseBB;
   
   if (elseContent.size() == 0) {
     // If we don't have an else, we just want to branch straight to the mergeBB when the cond is false
     builder.CreateCondBr(cond, thenBB, mergeBB);
   } else {
     // Otherwise, we need to branch to else's BB
+    elseBB = BasicBlock::Create(getGlobalContext(), "else", currentFunction);
     builder.CreateCondBr(cond, thenBB, elseBB);
   }
 
@@ -337,7 +351,7 @@ void IfAST::codeGen() {
   codeGenMultiple(thenContent); 
   builder.CreateBr(mergeBB);
 
-  if (elseContent.size() > 0) {  // If we do have an else branch
+  if (elseContent.size() > 0) {  // If we have an else branch
     builder.SetInsertPoint(elseBB);
     codeGenMultiple(elseContent);
     builder.CreateBr(mergeBB);
@@ -349,7 +363,7 @@ void IfAST::codeGen() {
 
 WordAST *parseToken(std::string tokenString) { 
 
-  if (words.count(tokenString) == 1) { 
+  if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
     // Just a basic word
     // Currently I essentially search words for tokenString twice - once here and once when constructing the AST - fix?
     // Does this allow EOF shenannigans? Should I check EOF first?
@@ -364,6 +378,8 @@ WordAST *parseToken(std::string tokenString) {
     return parseDefinition();
   } else if (tokenString == "if") {  // if
     return parseIf();
+  } else if (tokenString == "recurse") {
+    return new RecurseAST();
   }
   
   std::string errorMsg = "Unknown word \"" + tokenString + "\"";
@@ -372,12 +388,13 @@ WordAST *parseToken(std::string tokenString) {
 }
 
 void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single word
-    Function *F = buildFunction("");  // create anonymous function to run the current word
-    node -> codeGen();
-    builder.CreateRetVoid();
-    void *FPtr = TheExecutionEngine->getPointerToFunction(F);
-    void (*FP)() = (void (*)())(intptr_t)FPtr;  // look into how this works
-    FP();
+  Function *F = buildFunction("");  // create anonymous function to run the current word
+  node -> codeGen();
+  builder.CreateRetVoid();
+  void *FPtr = TheExecutionEngine->getPointerToFunction(F);
+  void (*FP)() = (void (*)())FPtr;  // look into how this works
+  FP();
+  TheExecutionEngine -> freeMachineCodeForFunction(F);
 }
 
 void mainLoop() {
@@ -670,7 +687,7 @@ int main() {
   buildSetStackValue(TheStack, rotsBottomVal);
   buildSetStackValue(rotsTop.ptr, rotsTop.val); 
   buildSetStackValue(rotsNext.ptr, rotsNext.val);
-  builder.CreateRetVoid();
+  builder.CreateRetVoid(); 
 
   dot = buildFunction("dot");
   a = builder.CreateCall(pop);
@@ -742,7 +759,6 @@ int main() {
   } else {
     // if we're not JITing, then we need to wrap our generated code in a main function
     
-    // Insert a main function and an entry block 
     FunctionType *mainType = FunctionType::get(int32Ty, false);
     Function *mainFunction = Function::Create(mainType, Function::ExternalLinkage, "main", theModule);
     BasicBlock *mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
