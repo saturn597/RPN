@@ -153,8 +153,10 @@ class DefinitionAST : public WordAST {
   std::vector<WordAST *> content;
   std::string name;
   std::vector<std::string> locals;
+  bool recursive;
 public:
-  DefinitionAST(std::string Name, std::vector<std::string> Locals, std::vector<WordAST *> Content) : name(Name), locals(Locals), content(Content) {}
+  DefinitionAST(std::string Name, bool Recursive, std::vector<std::string> Locals, std::vector<WordAST *> Content) : 
+    name(Name), recursive(Recursive), locals(Locals), content(Content) {}
   virtual void codeGen();
 };
 
@@ -195,7 +197,7 @@ BasicWordAST *parseBasicWord() {
   return new BasicWordAST(name);
 }
 
-DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs which I think isn't possible in forth
+DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs - not sure if this works in forth
   getNextToken();  // eat :
   
   std::string name = curTok;
@@ -203,7 +205,15 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
   getNextToken();  // eat name
 
   std::vector<std::string> locals;  // maybe use std::set for this because I'm mostly searching it and don't want dupes -- but I care about order
-  
+ 
+  bool recursive = false;
+  if (curTok == "recursive") {  // the use of the "recursive" word is nonstandard forth per gforth manual (but seems nice)
+    recursive = true; 
+    words[name];  // add this to our word list (even though we don't actually have code for it yet) 
+    // need a way to undo that definition if something fails
+    getNextToken();  // eat recursive
+  } 
+
   if (curTok == "{") {
     // word has locals
     getNextToken();  // eat {
@@ -221,15 +231,15 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
     if (curTok == "") return (DefinitionAST *)errorP("; expected");  // eof before end of definition
     if (std::find(locals.begin(), locals.end(), curTok) != locals.end()) {  // word is a local
       content.push_back(new LocalRefAST(curTok));
-    } else {  // if word is not a local
+    } else {  // if word is not a local, parse it normally
       content.push_back(parseToken(curTok));
     }
     getNextToken();
   }  
 
   if (curTok != ";") return (DefinitionAST *)errorP("Unexpected error");  // This shouldn't happen  -- maybe remove this line
-
-  return new DefinitionAST(name, locals, content);
+  
+  return new DefinitionAST(name, recursive, locals, content);
 }
 
 IfAST *parseIf() {
@@ -303,11 +313,12 @@ void RecurseAST::codeGen() {
 }
 
 void DefinitionAST::codeGen() {
-
   BasicBlock *originalBlock = builder.GetInsertBlock();
 
   Function *f = buildFunction(name);
  
+  words[name] = f; // maybe provide for the ability to undo this if something fails
+
   unsigned idx;
   for (std::vector<std::string>::reverse_iterator i = locals.rbegin(); i != locals.rend(); ++i) {
     currentLocals[*i] = builder.CreateAlloca(Type::getDoubleTy(getGlobalContext()));
@@ -320,8 +331,6 @@ void DefinitionAST::codeGen() {
 
   // Add function validation and optimization here, check for conflicting names
   verifyFunction(*f); 
-
-  words[name] = f; 
 
   currentLocals.clear();
 
@@ -365,7 +374,7 @@ WordAST *parseToken(std::string tokenString) {
 
   if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
     // Just a basic word
-    // Currently I essentially search words for tokenString twice - once here and once when constructing the AST - fix?
+    // Currently I essentially search words for tokenString twice - once here and once during codegen - fix?
     // Does this allow EOF shenannigans? Should I check EOF first?
     return parseBasicWord();
   } else if (tokenString == "") {  // eof
@@ -374,11 +383,11 @@ WordAST *parseToken(std::string tokenString) {
     return parseComment();
   } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
     return parseNumber(); 
-  } else if (tokenString == ":") {  // definition
+  } else if (tokenString == ":") {  // colon definition
     return parseDefinition();
   } else if (tokenString == "if") {  // if
     return parseIf();
-  } else if (tokenString == "recurse") {
+  } else if (tokenString == "recurse") {  // recurse
     return new RecurseAST();
   }
   
