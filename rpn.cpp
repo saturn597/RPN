@@ -77,11 +77,24 @@ uint64_t stackItemSize;
 
 bool errors = false;  // Should I be using exceptions maybe?
 
+struct StackItem {
+  Value *val;
+  Value *ptr;  // Maybe I should use more specific types where applicable?
+};
+
 class WordAST;
 WordAST *parseToken(std::string tokenString);  
 Function *buildFunction(std::string);  
 
 WordAST *parseToken(std::string tokenString);
+
+Type *voidTy = Type::getVoidTy(getGlobalContext());
+Type *doubleTy = Type::getDoubleTy(getGlobalContext());
+Type *int8Ty = Type::getInt8Ty(getGlobalContext());
+Type *int32Ty = Type::getInt32Ty(getGlobalContext());
+Type *int64Ty = Type::getInt64Ty(getGlobalContext());
+PointerType *int8PointerTy = PointerType::get(int8Ty, 0);
+
 
 // TODO: Move the stack management into its own class maybe
 
@@ -123,10 +136,10 @@ static std::string gettok() {
   return tokenString;  
 }
 
-static std::string curTok;
-std::string getNextToken() {   // Is this needed?
-  return curTok = gettok();
-}
+
+////////////////////
+// AST Definitions
+////////////////////
 
 class WordAST {
 // Base class for other word types
@@ -180,6 +193,16 @@ public:
   virtual void codeGen();
 };  // maybe merge this class with BasicWord
 
+
+////////////////////
+// Parsing
+////////////////////
+
+static std::string curTok;
+std::string getNextToken() {   // Is this needed?
+  return curTok = gettok();
+}
+
 WordAST *errorP(const char *msg) {
   fprintf(stderr, "Parser error: %s\n", msg);
   errors = true;
@@ -227,17 +250,19 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
 
   std::vector<WordAST *> content;
 
+  bool parseError = false;
   while (curTok != ";") {
     if (curTok == "") return (DefinitionAST *)errorP("; expected");  // eof before end of definition
     if (std::find(locals.begin(), locals.end(), curTok) != locals.end()) {  // word is a local
       content.push_back(new LocalRefAST(curTok));
     } else {  // if word is not a local, parse it normally
-      content.push_back(parseToken(curTok));
+      WordAST *parsed = parseToken(curTok);
+      if (parsed) content.push_back(parsed); else parseError = true;
     }
     getNextToken();
   }  
-
-  if (curTok != ";") return (DefinitionAST *)errorP("Unexpected error");  // This shouldn't happen  -- maybe remove this line
+  
+  if (parseError) return (DefinitionAST *)errorP("Couldn't parse function");
   
   return new DefinitionAST(name, recursive, locals, content);
 }
@@ -284,6 +309,47 @@ WordAST *parseComment() {
 
 }
 
+WordAST *parseToken(std::string tokenString) { 
+  // General function for parsing any top level token
+
+  if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
+    // Just a basic word
+    // Currently I essentially search words for tokenString twice - once here and once during codegen - fix?
+    // Does this allow EOF shenannigans? Should I check EOF first?
+    return parseBasicWord();
+  } else if (tokenString == "") {  // eof
+    return 0;
+  } else if (tokenString == "(") {  // beginning of a comment
+    return parseComment();
+  } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
+    return parseNumber(); 
+  } else if (tokenString == ":") {  // colon definition
+    return parseDefinition();
+  } else if (tokenString == "if") {  // if
+    return parseIf();
+  } else if (tokenString == "recurse") {  // recurse
+    return new RecurseAST();
+  }
+  
+  std::string errorMsg = "Unknown word \"" + tokenString + "\"";
+  return errorP(errorMsg.c_str());
+
+}
+
+
+////////////////////
+// Code Generation
+////////////////////
+
+void codeGenMultiple(std::vector<WordAST *> content) {
+  // Generate code for multiple words in sequence
+
+  for (unsigned idx = 0; idx < content.size(); ++idx) {
+    content.at(idx) -> codeGen();
+  }
+
+}
+
 void NumberAST::codeGen() {
   builder.CreateCall(push, getDouble(val));
 }
@@ -294,15 +360,6 @@ void BasicWordAST::codeGen() {
 
 void LocalRefAST::codeGen() {
   buildPush(builder.CreateLoad(currentLocals[name]));
-}
-
-void codeGenMultiple(std::vector<WordAST *> content) {
-  // Generate code for multiple words in sequence
-
-  for (unsigned idx = 0; idx < content.size(); ++idx) {
-    content.at(idx) -> codeGen();
-  }
-
 }
 
 void RecurseAST::codeGen() {
@@ -370,66 +427,9 @@ void IfAST::codeGen() {
 
 }
 
-WordAST *parseToken(std::string tokenString) { 
-
-  if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
-    // Just a basic word
-    // Currently I essentially search words for tokenString twice - once here and once during codegen - fix?
-    // Does this allow EOF shenannigans? Should I check EOF first?
-    return parseBasicWord();
-  } else if (tokenString == "") {  // eof
-    return 0;
-  } else if (tokenString == "(") {  // beginning of a comment
-    return parseComment();
-  } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
-    return parseNumber(); 
-  } else if (tokenString == ":") {  // colon definition
-    return parseDefinition();
-  } else if (tokenString == "if") {  // if
-    return parseIf();
-  } else if (tokenString == "recurse") {  // recurse
-    return new RecurseAST();
-  }
-  
-  std::string errorMsg = "Unknown word \"" + tokenString + "\"";
-  return errorP(errorMsg.c_str());
-
-}
-
-void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single word
-  Function *F = buildFunction("");  // create anonymous function to run the current word
-  node -> codeGen();
-  builder.CreateRetVoid();
-  void *FPtr = TheExecutionEngine->getPointerToFunction(F);
-  void (*FP)() = (void (*)())FPtr;  // look into how this works
-  FP();
-  TheExecutionEngine -> freeMachineCodeForFunction(F);
-}
-
-void mainLoop() {
-
-  WordAST *nextASTNode;
-  
-  while (true) {
-    getNextToken();
-    
-    nextASTNode = parseToken(curTok);
-    
-    if (nextASTNode == 0) {
-      return;
-    } else if (JITMode) {
-      JITASTNode(nextASTNode); 
-    } else {
-      nextASTNode -> codeGen();
-    }
-  }
-
-}
-
-struct StackItem {
-  Value *val;
-  Value *ptr;  // Maybe I should use more specific types where applicable?
-};
+////////////////////////////////
+// Generating code for built ins
+////////////////////////////////
 
 Value *buildGetStackValue(Value *stackItemPtr) {
   // Generate code to get the value from the stack element pointed to by stackItemPtr
@@ -471,10 +471,7 @@ void buildSetStackItem(Value *stackItemPtr, Value *newValue, Value *newPtr) { //
   // Generate code to set the fields of a stack item structure
   
   buildSetStackValue(stackItemPtr, newValue);
-
-  Value *idx[] = { getInt32(0), getInt32(1) }; 
-  Value *ptrPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "settingPtr");
-  builder.CreateStore(newPtr, ptrPtr);
+  buildSetStackPointer(stackItemPtr, newPtr);
 
 }
 
@@ -485,9 +482,7 @@ struct StackItem buildGetStackItem(Value *stackItemPtr) {
 
   item.val = buildGetStackValue(stackItemPtr);
 
-  Value *idx[] = { getInt32(0), getInt32(1) };
-  Value *ptrPtr = builder.CreateInBoundsGEP(stackItemPtr, idx, "gettingPtr");
-  item.ptr = builder.CreateLoad(ptrPtr, "ptr");
+  item.ptr = buildGetStackPointer(stackItemPtr);
 
   return item;
 
@@ -545,25 +540,7 @@ Function *buildFunction(std::string name) {
 
 }
 
-int main() {
-  InitializeNativeTarget(); 
-
-  // Set up useful types
-  // TODO: Maybe declare other types here to shorten the function declarations
-  stackItemType = StructType::create(getGlobalContext());  // create opaque structure to forward declare it
-  stackItemPointerType = PointerType::get(stackItemType, 0);  // so this and the next line can refer to each other
-  stackItemType -> setBody(Type::getDoubleTy(getGlobalContext()), stackItemPointerType, NULL);
-
-  Type *voidTy = Type::getVoidTy(getGlobalContext());
-  Type *doubleTy = Type::getDoubleTy(getGlobalContext());
-  Type *int8Ty = Type::getInt8Ty(getGlobalContext());
-  Type *int32Ty = Type::getInt32Ty(getGlobalContext());
-  Type *int64Ty = Type::getInt64Ty(getGlobalContext());
-  PointerType *int8PointerTy = PointerType::get(int8Ty, 0);
-
-  // Our global stack
-  TheStack = (GlobalVariable*)(theModule -> getOrInsertGlobal("thestack", stackItemType));
-  TheStack -> setInitializer(Constant::getNullValue(stackItemType));
+void codeGenBuiltIns() {
 
   // Declare useful external functions
   mallocType = FunctionType::get(int8PointerTy, int64Ty, false);
@@ -727,7 +704,7 @@ int main() {
   builder.SetInsertPoint(finishedBlock); 
   builder.CreateRetVoid();
 
-  words["+"] = add;  // Do forth words even need to correspond to functions?
+  words["+"] = add;
   words["-"] = sub;
   words["*"] = mul;
   words["/"] = divi;
@@ -749,6 +726,58 @@ int main() {
   words["."] = dot;
   words[".s"] = dotS;
 
+}
+
+
+////////////////////
+// Top level loops
+////////////////////
+
+void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single word
+  Function *F = buildFunction("");  // create anonymous function to run the current word
+  node -> codeGen();
+  builder.CreateRetVoid();
+  void *FPtr = TheExecutionEngine->getPointerToFunction(F);
+  void (*FP)() = (void (*)())FPtr;  // look into how this works
+  FP();
+  TheExecutionEngine -> freeMachineCodeForFunction(F);
+}
+
+void mainLoop() {
+
+  WordAST *nextASTNode;
+  
+  while (true) {
+    getNextToken();
+    
+    nextASTNode = parseToken(curTok);
+    
+    if (nextASTNode == 0) { 
+      if (!JITMode) return;
+    } else if (JITMode) {
+      JITASTNode(nextASTNode); 
+    } else {
+      nextASTNode -> codeGen();
+    }
+  }
+
+}
+
+int main() {
+  InitializeNativeTarget(); 
+
+  // Set up useful types
+  // TODO: Maybe declare other types here to shorten the function declarations
+  stackItemType = StructType::create(getGlobalContext());  // create opaque structure to forward declare it
+  stackItemPointerType = PointerType::get(stackItemType, 0);  // so this and the next line can refer to each other
+  stackItemType -> setBody(Type::getDoubleTy(getGlobalContext()), stackItemPointerType, NULL);
+
+  // Our global stack
+  TheStack = (GlobalVariable*)(theModule -> getOrInsertGlobal("thestack", stackItemType));
+  TheStack -> setInitializer(Constant::getNullValue(stackItemType));
+
+  codeGenBuiltIns();
+  
   DataLayout dl = DataLayout("");
   stackItemSize = dl.getTypeAllocSize(stackItemType);
 
