@@ -1,7 +1,13 @@
+
+/* RPN calculator and Forth imitator that compiles to LLVM.
+ * Inspired by http://llvm.org/releases/3.4.2/docs/tutorial/index.html
+ */
+
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/JIT.h"
@@ -11,20 +17,9 @@
 #include "llvm/Support/raw_os_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Support/TargetSelect.h"
-#include <string>
-
-// TODO: be consistent between calling buildPop versus buildCall(pop) - and likewise for push
-// Also, fix ordering of AST and parser definitions so it's consistent (maybe base it on parseToken's ordering) 
-
-/* RPN calculator and Forth imitator that compiles to LLVM.
- * Inspired by http://llvm.org/releases/3.4.2/docs/tutorial/index.html
- */
 
 //TODO: Take this stuff out of global?
 using namespace llvm;
-
-void buildPush(Value *);
-Value* buildPop();
 
 LLVMContext &context = getGlobalContext();
 static Module *theModule = new Module("rpn", context); 
@@ -83,18 +78,8 @@ struct StackItem {
 };
 
 class WordAST;
-WordAST *parseToken(std::string tokenString);  
+
 Function *buildFunction(std::string);  
-
-WordAST *parseToken(std::string tokenString);
-
-Type *voidTy = Type::getVoidTy(getGlobalContext());
-Type *doubleTy = Type::getDoubleTy(getGlobalContext());
-Type *int8Ty = Type::getInt8Ty(getGlobalContext());
-Type *int32Ty = Type::getInt32Ty(getGlobalContext());
-Type *int64Ty = Type::getInt64Ty(getGlobalContext());
-PointerType *int8PointerTy = PointerType::get(int8Ty, 0);
-
 
 // TODO: Move the stack management into its own class maybe
 
@@ -113,6 +98,11 @@ static Value *getInt8(int x) {
 static Value *getDouble(double x) {
   return ConstantFP::get(getGlobalContext(), APFloat(x));
 }
+
+
+////////////////////
+// Tokenizing
+////////////////////
 
 static std::string gettok() {
   static char lastChar = ' ';
@@ -148,6 +138,13 @@ public:
   virtual void codeGen() = 0;
 };
 
+class BasicWordAST : public WordAST {
+  std::string name;
+public:
+  BasicWordAST(std::string Name) : name(Name) {}
+  virtual void codeGen();
+};
+
 class NumberAST : public WordAST {
   double val;
 public:
@@ -155,10 +152,11 @@ public:
   virtual void codeGen();
 };
 
-class BasicWordAST : public WordAST {
-  std::string name;
+class IfAST : public WordAST {
+  std::vector<WordAST *> thenContent;
+  std::vector<WordAST *> elseContent;
 public:
-  BasicWordAST(std::string Name) : name(Name) {}
+  IfAST(std::vector<WordAST *> ThenContent, std::vector<WordAST *> ElseContent) : thenContent(ThenContent), elseContent(ElseContent) {}
   virtual void codeGen();
 };
 
@@ -173,19 +171,6 @@ public:
   virtual void codeGen();
 };
 
-class RecurseAST : public WordAST {
-  public:
-    virtual void codeGen();
-};
-
-class IfAST : public WordAST {
-  std::vector<WordAST *> thenContent;
-  std::vector<WordAST *> elseContent;
-public:
-  IfAST(std::vector<WordAST *> ThenContent, std::vector<WordAST *> ElseContent) : thenContent(ThenContent), elseContent(ElseContent) {}
-  virtual void codeGen();
-};
-
 class LocalRefAST : public WordAST {
   std::string name;
 public:
@@ -194,9 +179,17 @@ public:
 };  // maybe merge this class with BasicWord
 
 
+class RecurseAST : public WordAST {
+  public:
+    virtual void codeGen();
+};
+
+
 ////////////////////
 // Parsing
 ////////////////////
+
+WordAST *parseToken(std::string tokenString);
 
 static std::string curTok;
 std::string getNextToken() {   // Is this needed?
@@ -209,15 +202,44 @@ WordAST *errorP(const char *msg) {
   return 0;
 }
 
+BasicWordAST *parseBasicWord() {
+  std::string name = curTok;
+  return new BasicWordAST(name);
+}
+
 NumberAST *parseNumber() {
   double number = strtod(curTok.c_str(), 0);
  // getNextToken();  // eat the number
   return new NumberAST(number);
 }
 
-BasicWordAST *parseBasicWord() {
-  std::string name = curTok;
-  return new BasicWordAST(name);
+IfAST *parseIf() {
+  
+  std::vector<WordAST *> thenContent;
+  std::vector<WordAST *> elseContent;
+  
+  getNextToken();  // Eat the if
+
+  while (curTok != "else" && curTok != "then") {
+    if (curTok == "") return (IfAST *)errorP("then or else expected");
+    thenContent.push_back(parseToken(curTok));
+    getNextToken();
+  }
+  
+  if (curTok == "then") {
+    return new IfAST(thenContent, elseContent);
+  }
+
+  getNextToken();  // Eat else
+
+  while (curTok != "then") {  // If we haven't already hit a then, need to keep going
+    if (curTok == "") return (IfAST *)errorP("then expected");
+    elseContent.push_back(parseToken(curTok));
+    getNextToken();
+  }
+
+  return new IfAST(thenContent, elseContent);
+
 }
 
 DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs - not sure if this works in forth
@@ -267,35 +289,6 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
   return new DefinitionAST(name, recursive, locals, content);
 }
 
-IfAST *parseIf() {
-  
-  std::vector<WordAST *> thenContent;
-  std::vector<WordAST *> elseContent;
-  
-  getNextToken();  // Eat the if
-
-  while (curTok != "else" && curTok != "then") {
-    if (curTok == "") return (IfAST *)errorP("then or else expected");
-    thenContent.push_back(parseToken(curTok));
-    getNextToken();
-  }
-  
-  if (curTok == "then") {
-    return new IfAST(thenContent, elseContent);
-  }
-
-  getNextToken();  // Eat else
-
-  while (curTok != "then") {  // If we haven't already hit a then, need to keep going
-    if (curTok == "") return (IfAST *)errorP("then expected");
-    elseContent.push_back(parseToken(curTok));
-    getNextToken();
-  }
-
-  return new IfAST(thenContent, elseContent);
-
-}
-
 WordAST *parseComment() {
 
   while (curTok != ")") {
@@ -317,18 +310,18 @@ WordAST *parseToken(std::string tokenString) {
     // Currently I essentially search words for tokenString twice - once here and once during codegen - fix?
     // Does this allow EOF shenannigans? Should I check EOF first?
     return parseBasicWord();
-  } else if (tokenString == "") {  // eof
-    return 0;
-  } else if (tokenString == "(") {  // beginning of a comment
-    return parseComment();
   } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
     return parseNumber(); 
-  } else if (tokenString == ":") {  // colon definition
-    return parseDefinition();
   } else if (tokenString == "if") {  // if
     return parseIf();
+  } else if (tokenString == ":") {  // colon definition
+    return parseDefinition();
   } else if (tokenString == "recurse") {  // recurse
     return new RecurseAST();
+  } else if (tokenString == "(") {  // beginning of a comment
+    return parseComment();
+  } else if (tokenString == "") {  // eof
+    return 0;
   }
   
   std::string errorMsg = "Unknown word \"" + tokenString + "\"";
@@ -347,57 +340,19 @@ void codeGenMultiple(std::vector<WordAST *> content) {
   for (unsigned idx = 0; idx < content.size(); ++idx) {
     content.at(idx) -> codeGen();
   }
-
-}
-
-void NumberAST::codeGen() {
-  builder.CreateCall(push, getDouble(val));
 }
 
 void BasicWordAST::codeGen() {
   builder.CreateCall(words[name]);
 }
 
-void LocalRefAST::codeGen() {
-  buildPush(builder.CreateLoad(currentLocals[name]));
-}
-
-void RecurseAST::codeGen() {
-  // This might be a little weird - calling recurse on the top level in real forth results in "Interpreting a compile-only word" error
-  // In ours will it call the anonymous function we're JITing to?
-  Function *currentFunction = builder.GetInsertBlock() -> getParent();
-  builder.CreateCall(currentFunction); 
-}
-
-void DefinitionAST::codeGen() {
-  BasicBlock *originalBlock = builder.GetInsertBlock();
-
-  Function *f = buildFunction(name);
- 
-  words[name] = f; // maybe provide for the ability to undo this if something fails
-
-  unsigned idx;
-  for (std::vector<std::string>::reverse_iterator i = locals.rbegin(); i != locals.rend(); ++i) {
-    currentLocals[*i] = builder.CreateAlloca(Type::getDoubleTy(getGlobalContext()));
-    builder.CreateStore(buildPop(), currentLocals[*i]); 
-  }
-
-  codeGenMultiple(content);  
-
-  builder.CreateRetVoid();
-
-  // Add function validation and optimization here, check for conflicting names
-  verifyFunction(*f); 
-
-  currentLocals.clear();
-
-  builder.SetInsertPoint(originalBlock);
-
+void NumberAST::codeGen() {
+  builder.CreateCall(push, getDouble(val));
 }
 
 void IfAST::codeGen() {
 
-  Value *cond = builder.CreateFCmpONE(buildPop(), getDouble(0.0), "ifCond");  // should buildPop be a call to pop instead?
+  Value *cond = builder.CreateFCmpONE(builder.CreateCall(pop), getDouble(0.0), "ifCond");  
   Function *currentFunction = builder.GetInsertBlock() -> getParent();
 
   BasicBlock *thenBB = BasicBlock::Create(getGlobalContext(), "then", currentFunction);
@@ -427,9 +382,54 @@ void IfAST::codeGen() {
 
 }
 
+void DefinitionAST::codeGen() {
+  BasicBlock *originalBlock = builder.GetInsertBlock();
+
+  Function *f = buildFunction(name);
+ 
+  words[name] = f; // maybe provide for the ability to undo this if something fails
+
+  unsigned idx;
+  for (std::vector<std::string>::reverse_iterator i = locals.rbegin(); i != locals.rend(); ++i) {
+    currentLocals[*i] = builder.CreateAlloca(Type::getDoubleTy(getGlobalContext()));
+    builder.CreateStore(builder.CreateCall(pop), currentLocals[*i]); 
+  }
+
+  codeGenMultiple(content);  
+
+  builder.CreateRetVoid();
+
+  // Add function validation and optimization here, check for conflicting names
+  verifyFunction(*f); 
+
+  currentLocals.clear();
+
+  builder.SetInsertPoint(originalBlock);
+
+}
+
+void RecurseAST::codeGen() {
+  // This might be a little weird - calling recurse on the top level in real forth results in "Interpreting a compile-only word" error
+  // In ours will it call the anonymous function we're JITing to?
+  Function *currentFunction = builder.GetInsertBlock() -> getParent();
+  builder.CreateCall(currentFunction); 
+}
+
+void LocalRefAST::codeGen() {
+  builder.CreateCall(push, builder.CreateLoad(currentLocals[name]));
+}
+
+
 ////////////////////////////////
 // Generating code for built ins
 ////////////////////////////////
+
+Type *voidTy = Type::getVoidTy(getGlobalContext());
+Type *doubleTy = Type::getDoubleTy(getGlobalContext());
+Type *int8Ty = Type::getInt8Ty(getGlobalContext());
+Type *int32Ty = Type::getInt32Ty(getGlobalContext());
+Type *int64Ty = Type::getInt64Ty(getGlobalContext());
+PointerType *int8PointerTy = PointerType::get(int8Ty, 0);
 
 Value *buildGetStackValue(Value *stackItemPtr) {
   // Generate code to get the value from the stack element pointed to by stackItemPtr
@@ -540,7 +540,14 @@ Function *buildFunction(std::string name) {
 
 }
 
+void buildPrintDouble(Value *doub) {
+  // Prints out the supplied Value * doub 
+  Value *opts[] = { fstring, doub };
+  builder.CreateCall(printf_, opts, "printfCall");
+}
+
 void codeGenBuiltIns() {
+  // Generates the code for some words that we want built into our language (and some code that's useful for defining those words)
 
   // Declare useful external functions
   mallocType = FunctionType::get(int8PointerTy, int64Ty, false);
@@ -550,7 +557,7 @@ void codeGenBuiltIns() {
   printfType = FunctionType::get(int32Ty, int8PointerTy, true);
   printf_ = Function::Create(printfType, Function::ExternalLinkage, "printf", theModule);
 
-  // Create some useful functions
+  // Create some general useful functions
   FunctionType *pushType = FunctionType::get(voidTy, doubleTy, false);
   push = Function::Create(pushType, Function::ExternalLinkage, "push", theModule);
   BasicBlock *pushEntry = BasicBlock::Create(getGlobalContext(), "entry", push);
@@ -677,12 +684,11 @@ void codeGenBuiltIns() {
 
   dot = buildFunction("dot");
   a = builder.CreateCall(pop);
-  Value *dotPrintfOpts[] = { fstring, a };  // Maybe make this more general so I can use it in building other functions
-  builder.CreateCall(printf_, dotPrintfOpts, "printfCall");
+  buildPrintDouble(a);
   builder.CreateRetVoid();
 
   dotS = buildFunction("dotS");  // Forth .s prints out the stack in LILO order, this is LIFO - fix?
-  BasicBlock *entry = builder.GetInsertBlock();  // could this replace one of the below?
+  BasicBlock *entry = builder.GetInsertBlock();  // could the entry block replace one of the below?
   BasicBlock *checkBlock = BasicBlock::Create(getGlobalContext(), "checkBlock", dotS);
   BasicBlock *finishedBlock = BasicBlock::Create(getGlobalContext(), "loopFinished", dotS);
   BasicBlock *unfinishedBlock = BasicBlock::Create(getGlobalContext(), "loopUnfinished", dotS);
@@ -697,8 +703,7 @@ void codeGenBuiltIns() {
   builder.CreateCondBr(cond, finishedBlock, unfinishedBlock);
   
   builder.SetInsertPoint(unfinishedBlock);
-  Value *dotSPrintfOpts[] = { fstring, currentItem.val };
-  builder.CreateCall(printf_, dotSPrintfOpts, "printfCall");
+  buildPrintDouble(currentItem.val);
   builder.CreateBr(checkBlock);
 
   builder.SetInsertPoint(finishedBlock); 
