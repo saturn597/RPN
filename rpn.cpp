@@ -3,6 +3,8 @@
  * Inspired by http://llvm.org/releases/3.4.2/docs/tutorial/index.html
  */
 
+// TODO: Consistency about "static" functions
+
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
@@ -25,7 +27,7 @@ LLVMContext &context = getGlobalContext();
 static Module *theModule = new Module("rpn", context); 
 static IRBuilder<> builder(context);
 
-bool JITMode = true;
+bool JITMode = false;
 static ExecutionEngine *TheExecutionEngine;
 
 StructType *stackItemType; 
@@ -70,8 +72,6 @@ std::map<std::string, Value *> currentLocals;
 
 uint64_t stackItemSize;
 
-bool errors = false;  // Should I be using exceptions maybe?
-
 struct StackItem {
   Value *val;
   Value *ptr;  // Maybe I should use more specific types where applicable?
@@ -104,20 +104,42 @@ static Value *getDouble(double x) {
 // Tokenizing
 ////////////////////
 
-static std::string gettok() {
+static char getNextChar(bool consume) {
+  // returns the next character from stdin (or returns the last char read if !consume)
+
+  // Adding this function so that dropLine and gettok can have a char buffer in common (lastChar)
+  // A singleton class with lastChar as an instance variable and drop and gettok as methods might be
+  // a bit more idiomatic (my guess anyway)
+  // It's also possible this could work without even sharing a char buffer
+  
   static char lastChar = ' ';
+  if (consume) lastChar = getchar(); 
+  return lastChar;
+}
+
+static void dropLine() {
+  // consumes input until the next newline or until EOF
+
+  char currentChar = getNextChar(false); 
+  while (currentChar != '\n' && currentChar != EOF) currentChar = getNextChar(true);
+
+}
+
+static std::string gettok() {
 
   std::string tokenString;
+  
+  char currentChar = getNextChar(false);
 
-  if (lastChar == EOF) return "";
+  if (currentChar == EOF) return "";
 
   // skip whitespace
-  while (isspace(lastChar))
-    lastChar = getchar();
+  while (isspace(currentChar))
+    currentChar = getNextChar(true);
 
-  while (!isspace(lastChar) && lastChar != EOF) {
-    tokenString += lastChar;
-    lastChar = getchar();
+  while (!isspace(currentChar) && currentChar != EOF) {
+    tokenString += currentChar;
+    currentChar = getNextChar(true);
   }
 
   // forth is case insensitive, so let's be case insensitive
@@ -196,12 +218,6 @@ std::string getNextToken() {   // Is this needed?
   return curTok = gettok();
 }
 
-WordAST *errorP(const char *msg) {
-  fprintf(stderr, "Parser error: %s\n", msg);
-  errors = true;
-  return 0;
-}
-
 BasicWordAST *parseBasicWord() {
   std::string name = curTok;
   return new BasicWordAST(name);
@@ -221,7 +237,7 @@ IfAST *parseIf() {
   getNextToken();  // Eat the if
 
   while (curTok != "else" && curTok != "then") {
-    if (curTok == "") return (IfAST *)errorP("then or else expected");
+    if (curTok == "") throw "then or else expected";
     thenContent.push_back(parseToken(curTok));
     getNextToken();
   }
@@ -232,8 +248,8 @@ IfAST *parseIf() {
 
   getNextToken();  // Eat else
 
-  while (curTok != "then") {  // If we haven't already hit a then, need to keep going
-    if (curTok == "") return (IfAST *)errorP("then expected");
+  while (curTok != "then") {  // If we haven't already hit a then, need to keep going until we do
+    if (curTok == "") throw "then expected";
     elseContent.push_back(parseToken(curTok));
     getNextToken();
   }
@@ -245,7 +261,7 @@ IfAST *parseIf() {
 DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs - not sure if this works in forth
   getNextToken();  // eat :
   
-  std::string name = curTok;
+  std::string name = curTok;  // the name we want to set for our word is the first token we get after the :
 
   getNextToken();  // eat name
 
@@ -263,7 +279,7 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
     // word has locals
     getNextToken();  // eat {
     while (curTok != "}") {
-      if (curTok == "") return (DefinitionAST *)errorP("} expected");  // eof before end of locals definition
+      if (curTok == "") throw "} expected";  // eof before end of locals definition
       locals.push_back(curTok);  // report on duplicates?
       getNextToken();
     } 
@@ -272,20 +288,16 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
 
   std::vector<WordAST *> content;
 
-  bool parseError = false;
   while (curTok != ";") {
-    if (curTok == "") return (DefinitionAST *)errorP("; expected");  // eof before end of definition
+    if (curTok == "") throw "; expected";  // eof before end of definition
     if (std::find(locals.begin(), locals.end(), curTok) != locals.end()) {  // word is a local
       content.push_back(new LocalRefAST(curTok));
     } else {  // if word is not a local, parse it normally
-      WordAST *parsed = parseToken(curTok);
-      if (parsed) content.push_back(parsed); else parseError = true;
+      content.push_back(parseToken(curTok));
     }
     getNextToken();
   }  
-  
-  if (parseError) return (DefinitionAST *)errorP("Couldn't parse function");
-  
+
   return new DefinitionAST(name, recursive, locals, content);
 }
 
@@ -293,7 +305,7 @@ WordAST *parseComment() {
 
   while (curTok != ")") {
     getNextToken();
-    if (curTok == "") return errorP(") expected");
+    if (curTok == "") throw ") expected";
   }
   
   getNextToken();  // eat )
@@ -324,8 +336,9 @@ WordAST *parseToken(std::string tokenString) {
     return 0;
   }
   
+  dropLine();
   std::string errorMsg = "Unknown word \"" + tokenString + "\"";
-  return errorP(errorMsg.c_str());
+  throw errorMsg;
 
 }
 
@@ -383,6 +396,7 @@ void IfAST::codeGen() {
 }
 
 void DefinitionAST::codeGen() {
+
   BasicBlock *originalBlock = builder.GetInsertBlock();
 
   Function *f = buildFunction(name);
@@ -420,9 +434,9 @@ void LocalRefAST::codeGen() {
 }
 
 
-////////////////////////////////
-// Generating code for built ins
-////////////////////////////////
+/////////////////////////////////////
+// Generating code for built-in words
+/////////////////////////////////////
 
 Type *voidTy = Type::getVoidTy(getGlobalContext());
 Type *doubleTy = Type::getDoubleTy(getGlobalContext());
@@ -755,15 +769,18 @@ void mainLoop() {
   while (true) {
     getNextToken();
     
-    nextASTNode = parseToken(curTok);
-    
-    if (nextASTNode == 0) { 
-      if (!JITMode) return;
-    } else if (JITMode) {
-      JITASTNode(nextASTNode); 
-    } else {
-      nextASTNode -> codeGen();
+    try {
+      nextASTNode = parseToken(curTok);
+      if (nextASTNode == 0) return;
+      if (JITMode) {
+        JITASTNode(nextASTNode);
+      } else {
+        nextASTNode -> codeGen();
+      }
+    } catch (std::string e) {
+      std::cout << e << "\n";
     }
+
   }
 
 }
@@ -811,10 +828,7 @@ int main() {
 
     // Create a return for main function
     builder.CreateRet(getInt32(0));
-
   }
-
-  if (errors) return 1;
 
   /*static FunctionPassManager *ThePM;
   ThePM -> add(createCFGSimplificationPass());*/
