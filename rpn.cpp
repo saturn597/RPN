@@ -70,6 +70,8 @@ Value *fstring;
 std::map<std::string, Function *> words;
 std::map<std::string, Value *> currentLocals;
 
+FILE *theFile;
+
 uint64_t stackItemSize;
 
 struct StackItem {
@@ -113,7 +115,7 @@ static char getNextChar(bool consume) {
   // It's also possible this could work without even sharing a char buffer
   
   static char lastChar = ' ';
-  if (consume) lastChar = getchar(); 
+  if (consume) lastChar = getc(theFile); 
   return lastChar;
 }
 
@@ -214,7 +216,7 @@ class RecurseAST : public WordAST {
 WordAST *parseToken(std::string tokenString);
 
 static std::string curTok;
-std::string getNextToken() {   // Is this needed?
+std::string getNextToken() {
   return curTok = gettok();
 }
 
@@ -762,7 +764,7 @@ void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single wor
   TheExecutionEngine -> freeMachineCodeForFunction(F);
 }
 
-void mainLoop() {
+int mainLoop() {
 
   WordAST *nextASTNode;
   
@@ -771,7 +773,7 @@ void mainLoop() {
     
     try {
       nextASTNode = parseToken(curTok);
-      if (nextASTNode == 0) return;
+      if (nextASTNode == 0) return 0;  // EOF
       if (JITMode) {
         JITASTNode(nextASTNode);
       } else {
@@ -779,13 +781,32 @@ void mainLoop() {
       }
     } catch (std::string e) {
       std::cout << e << "\n";
+      if (!JITMode) {
+        // If we're compiling a file, we want to stop here because we ran into an error
+        return 1;  
+      }
     }
-
   }
 
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+
+  if (argc == 1) {
+    JITMode = true;
+    theFile = stdin;
+  } else if (argc == 2) {
+    JITMode = false;
+    theFile = fopen(argv[1], "r");
+    if (theFile == NULL) {
+      std::cout << "Couldn't open file \"" << argv[1] << "\"\n";
+      return 1;
+    }
+  } else {
+    std::cout << "usage: rpn [filename]\n";
+    return 1;
+  }
+
   InitializeNativeTarget(); 
 
   // Set up useful types
@@ -824,7 +845,9 @@ int main() {
     BasicBlock *mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
     builder.SetInsertPoint(mainEntry);
 
-    mainLoop(); 
+    if (mainLoop() == 1) return 1;
+
+    fclose(theFile);
 
     // Create a return for main function
     builder.CreateRet(getInt32(0));
