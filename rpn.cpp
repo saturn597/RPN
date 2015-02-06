@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -70,7 +71,7 @@ Value *fstring;
 std::map<std::string, Function *> words;
 std::map<std::string, Value *> currentLocals;
 
-FILE *theFile;
+std::istream *theStream;
 
 uint64_t stackItemSize;
 
@@ -106,17 +107,30 @@ static Value *getDouble(double x) {
 // Tokenizing
 ////////////////////
 
-static char getNextChar(bool consume) {
-  // returns the next character from stdin (or returns the last char read if !consume)
+static char getNextChar(bool advance) {
+  // returns the next character from stdin (or returns the last char read if !advance)
 
   // Adding this function so that dropLine and gettok can have a char buffer in common (lastChar)
   // A singleton class with lastChar as an instance variable and drop and gettok as methods might be
   // a bit more idiomatic (my guess anyway)
   // It's also possible this could work without even sharing a char buffer
-  
+
+  static std::string theLine = " ";
   static char lastChar = ' ';
-  if (consume) lastChar = getc(theFile); 
+  static std::string::iterator pos = theLine.begin();
+
+  if (advance) {
+    pos++;
+    if (pos == theLine.end()) {
+      if (JITMode) std::cout << "Ready> ";
+      if (!getline(*theStream, theLine)) return EOF;
+      theLine.append("\n");
+      pos = theLine.begin();
+    }
+    lastChar = *pos;
+  }
   return lastChar;
+  //currently this is really nasty
 }
 
 static void dropLine() {
@@ -779,7 +793,7 @@ int mainLoop() {
       } else {
         nextASTNode -> codeGen();
       }
-    } catch (std::string e) {
+    } catch (std::string e) {  // TODO: Use more meaningful classes than std::string
       std::cout << e << "\n";
       if (!JITMode) {
         // If we're compiling a file, we want to stop here because we ran into an error
@@ -792,16 +806,19 @@ int mainLoop() {
 
 int main(int argc, char *argv[]) {
 
-  if (argc == 1) {
+  std::ifstream fs;  // the filestream to open if we need one
+
+  if (argc == 1) {  // if no file, then we just read stdin in JITMode
     JITMode = true;
-    theFile = stdin;
-  } else if (argc == 2) {
+    theStream = &std::cin;
+  } else if (argc == 2) {  // otherwise open the file we got on the command line
     JITMode = false;
-    theFile = fopen(argv[1], "r");
-    if (theFile == NULL) {
+    fs.open(argv[1]);
+    if (!fs.is_open()) {
       std::cout << "Couldn't open file \"" << argv[1] << "\"\n";
       return 1;
     }
+    theStream = &fs;  // point theStream to our file so other functions can use it
   } else {
     std::cout << "usage: rpn [filename]\n";
     return 1;
@@ -835,6 +852,8 @@ int main(int argc, char *argv[]) {
       exit(1);
     }
 
+    std::cout << "Welcome to rpn!\n";
+
     mainLoop();
 
   } else {
@@ -846,8 +865,8 @@ int main(int argc, char *argv[]) {
     builder.SetInsertPoint(mainEntry);
 
     if (mainLoop() == 1) return 1;
-
-    fclose(theFile);
+    
+    if (fs.is_open()) fs.close();
 
     // Create a return for main function
     builder.CreateRet(getInt32(0));
