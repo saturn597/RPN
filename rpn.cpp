@@ -107,6 +107,8 @@ static Value *getDouble(double x) {
 // Tokenizing
 ////////////////////
 
+std::stringstream currentLine ("1\n");
+
 static char getNextChar(bool advance) {
   // returns the next character from stdin (or returns the last char read if !advance)
 
@@ -115,22 +117,13 @@ static char getNextChar(bool advance) {
   // a bit more idiomatic (my guess anyway)
   // It's also possible this could work without even sharing a char buffer
 
-  static std::string theLine = " ";
-  static char lastChar = ' ';
-  static std::string::iterator pos = theLine.begin();
+  static char lastChar =' ';
 
   if (advance) {
-    pos++;
-    if (pos == theLine.end()) {
-      if (JITMode) std::cout << "Ready> ";
-      if (!getline(*theStream, theLine)) return EOF;
-      theLine.append("\n");
-      pos = theLine.begin();
-    }
-    lastChar = *pos;
+    lastChar = currentLine.get();
+    if (lastChar == '\n') lastChar = EOF;
   }
   return lastChar;
-  //currently this is really nasty
 }
 
 static void dropLine() {
@@ -160,7 +153,6 @@ static std::string gettok() {
 
   // forth is case insensitive, so let's be case insensitive
   std::transform(tokenString.begin(), tokenString.end(), tokenString.begin(), ::tolower); 
-
   return tokenString;  
 }
 
@@ -352,7 +344,6 @@ WordAST *parseToken(std::string tokenString) {
     return 0;
   }
   
-  dropLine();
   std::string errorMsg = "Unknown word \"" + tokenString + "\"";
   throw errorMsg;
 
@@ -787,7 +778,16 @@ int mainLoop() {
     
     try {
       nextASTNode = parseToken(curTok);
-      if (nextASTNode == 0) return 0;  // EOF
+      if (nextASTNode == 0) {  // our currentLine ran out of characters
+        std::string lineTemp;
+        if (JITMode) std::cout << "Ready> ";
+        if (!getline(*theStream, lineTemp)) {  // eof
+          return 0; 
+        };
+        currentLine.str(lineTemp + "\n");  // why doesn't currentLine << work? 
+        getNextChar(true);  
+        continue; 
+      }
       if (JITMode) {
         JITASTNode(nextASTNode);
       } else {
