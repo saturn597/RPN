@@ -28,7 +28,6 @@ LLVMContext &context = getGlobalContext();
 static Module *theModule = new Module("rpn", context); 
 static IRBuilder<> builder(context);
 
-bool JITMode = false;
 static ExecutionEngine *TheExecutionEngine;
 
 StructType *stackItemType; 
@@ -107,6 +106,8 @@ static Value *getDouble(double x) {
 // Tokenizing
 ////////////////////
 
+bool showPrompt = false;  // show prompt when getting next line?
+
 static char getNextChar(bool advance) {
   // returns the next character from stdin (or returns the last char read if !advance)
 
@@ -115,14 +116,14 @@ static char getNextChar(bool advance) {
   // a bit more idiomatic (my guess anyway)
   // It's also possible this could work without even sharing a char buffer
 
-  static std::string theLine = " ";
+  static std::string theLine = " ";  // could switch to using a stringstream (can get chars from it)
   static char lastChar = ' ';
   static std::string::iterator pos = theLine.begin();
 
   if (advance) {
     pos++;
     if (pos == theLine.end()) {
-      if (JITMode) std::cout << "Ready> ";
+      if (showPrompt) std::cout << "Ready> ";
       if (!getline(*theStream, theLine)) return EOF;
       theLine.append("\n");
       pos = theLine.begin();
@@ -778,12 +779,14 @@ void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single wor
   TheExecutionEngine -> freeMachineCodeForFunction(F);
 }
 
-int mainLoop() {
+int mainLoop(bool JITMode) {
 
   WordAST *nextASTNode;
   
   while (true) {
+    if (JITMode) showPrompt = true;  // ick
     getNextToken();
+    showPrompt = false;  // ick
     
     try {
       nextASTNode = parseToken(curTok);
@@ -805,6 +808,8 @@ int mainLoop() {
 }
 
 int main(int argc, char *argv[]) {
+  
+  bool JITMode;
 
   std::ifstream fs;  // the filestream to open if we need one
 
@@ -854,7 +859,7 @@ int main(int argc, char *argv[]) {
 
     std::cout << "Welcome to rpn!\n";
 
-    mainLoop();
+    mainLoop(JITMode);
 
   } else {
     // if we're not JITing, then we need to wrap our generated code in a main function
@@ -864,7 +869,7 @@ int main(int argc, char *argv[]) {
     BasicBlock *mainEntry = BasicBlock::Create(getGlobalContext(), "entry", mainFunction);
     builder.SetInsertPoint(mainEntry);
 
-    if (mainLoop() == 1) return 1;
+    if (mainLoop(JITMode) == 1) return 1;
     
     if (fs.is_open()) fs.close();
 
