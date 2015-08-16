@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -21,7 +22,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Support/TargetSelect.h"
 
-//TODO: Take this stuff out of global?
+//TODO: Take this stuff out of global scope?
 using namespace llvm;
 
 LLVMContext &context = getGlobalContext();
@@ -30,15 +31,17 @@ static IRBuilder<> builder(context);
 
 static ExecutionEngine *TheExecutionEngine;
 
+GlobalVariable *TheStack;
+
 StructType *stackItemType; 
 PointerType *stackItemPointerType;
+
 Function *malloc_;
 FunctionType *mallocType;
 Function *free_;
 FunctionType *freeType;
 Function *printf_;
 FunctionType *printfType;
-GlobalVariable *TheStack;
 
 Function *pop;
 Function *push;
@@ -72,6 +75,9 @@ std::map<std::string, Value *> currentLocals;
 
 std::istream *theStream;
 
+std::stack<BasicBlock *> beginBlocks;
+std::stack<BasicBlock *> exitBlocks;
+
 uint64_t stackItemSize;
 
 struct StackItem {
@@ -101,6 +107,14 @@ static Value *getDouble(double x) {
   return ConstantFP::get(getGlobalContext(), APFloat(x));
 }
 
+////////////////////
+// Exceptions
+////////////////////
+
+class CompilerException: public std::runtime_error {
+  public:
+    CompilerException(std::string const& whatValue) : std::runtime_error(whatValue) {};
+};
 
 ////////////////////
 // Tokenizing
@@ -111,12 +125,12 @@ bool showPrompt = false;  // show prompt when getting next line?
 static char getNextChar(bool advance) {
   // returns the next character from stdin (or returns the last char read if !advance)
 
-  // Adding this function so that dropLine and gettok can have a char buffer in common (lastChar)
+  // Adding this function so that dropLine and gettok can have a char buffer in common (lastChar).
   // A singleton class with lastChar as an instance variable and drop and gettok as methods might be
-  // a bit more idiomatic (my guess anyway)
+  // another way to achieve that, and might be more idiomatic, so something to consider.
   // It's also possible this could work without even sharing a char buffer
 
-  static std::string theLine = " ";  // could switch to using a stringstream (can get chars from it)
+  static std::string theLine = " ";
   static char lastChar = ' ';
   static std::string::iterator pos = theLine.begin();
 
@@ -199,6 +213,24 @@ public:
   virtual void codeGen();
 };
 
+class BeginAST : public WordAST {
+public:
+  BeginAST() {};
+  virtual void codeGen();
+};
+
+class AgainAST : public WordAST { 
+public:
+  AgainAST() {};
+  virtual void codeGen();
+};
+
+class WhileAST : public WordAST {
+public:
+  WhileAST() {};
+  virtual void codeGen();
+};
+
 class DefinitionAST : public WordAST {
   std::vector<WordAST *> content;
   std::string name;
@@ -219,8 +251,8 @@ public:
 
 
 class RecurseAST : public WordAST {
-  public:
-    virtual void codeGen();
+public:
+  virtual void codeGen();
 };
 
 
@@ -254,7 +286,7 @@ IfAST *parseIf() {
   getNextToken();  // Eat the if
 
   while (curTok != "else" && curTok != "then") {
-    if (curTok == "") throw "then or else expected";
+    if (curTok == "") throw CompilerException("then or else expected");
     thenContent.push_back(parseToken(curTok));
     getNextToken();
   }
@@ -266,7 +298,7 @@ IfAST *parseIf() {
   getNextToken();  // Eat else
 
   while (curTok != "then") {  // If we haven't already hit a then, need to keep going until we do
-    if (curTok == "") throw "then expected";
+    if (curTok == "") throw CompilerException("then expected");
     elseContent.push_back(parseToken(curTok));
     getNextToken();
   }
@@ -275,7 +307,25 @@ IfAST *parseIf() {
 
 }
 
-DefinitionAST *parseDefinition() {  // This will allow : definitions inside : defs - not sure if this works in forth
+BeginAST *parseBegin() {
+
+  return new BeginAST();
+
+}
+
+AgainAST *parseAgain() {
+
+  return new AgainAST();
+
+}
+
+WhileAST *parseWhile() {
+  
+  return new WhileAST();
+
+}
+
+DefinitionAST *parseDefinition() {  // Note: this will allow colon definitions inside : defs - not sure it works that way in forth
   getNextToken();  // eat :
   
   std::string name = curTok;  // the name we want to set for our word is the first token we get after the :
@@ -296,7 +346,7 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
     // word has locals
     getNextToken();  // eat {
     while (curTok != "}") {
-      if (curTok == "") throw "} expected";  // eof before end of locals definition
+      if (curTok == "") throw CompilerException("} expected");  // eof before end of locals definition
       locals.push_back(curTok);  // report on duplicates?
       getNextToken();
     } 
@@ -306,7 +356,7 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
   std::vector<WordAST *> content;
 
   while (curTok != ";") {
-    if (curTok == "") throw "; expected";  // eof before end of definition
+    if (curTok == "") throw CompilerException("; expected");  // eof before end of definition
     if (std::find(locals.begin(), locals.end(), curTok) != locals.end()) {  // word is a local
       content.push_back(new LocalRefAST(curTok));
     } else {  // if word is not a local, parse it normally
@@ -320,12 +370,13 @@ DefinitionAST *parseDefinition() {  // This will allow : definitions inside : de
 
 WordAST *parseComment() {
 
-  while (curTok != ")") {
-    getNextToken();
-    if (curTok == "") throw ") expected";
+  while (true) {
+    char nextChar = getNextChar(true);
+    if (nextChar == EOF) throw CompilerException(") expected");
+    if (nextChar == ')') break;
   }
-  
-  getNextToken();  // eat )
+  getNextChar(true);
+  getNextToken();
 
   return parseToken(curTok);
 
@@ -335,14 +386,23 @@ WordAST *parseToken(std::string tokenString) {
   // General function for parsing any top level token
 
   if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
-    // Just a basic word
-    // Currently I essentially search words for tokenString twice - once here and once during codegen - fix?
+    // If so, this is just a basic word
+    // Currently I search words for tokenString twice - once here and once during codegen - fix?
     // Does this allow EOF shenannigans? Should I check EOF first?
     return parseBasicWord();
-  } else if (isdigit(tokenString.front())) {  // Do more validating to ensure it's a number
+  } else if (isdigit(tokenString.front())) {  // TODO: do more validating to ensure it's a number
     return parseNumber(); 
-  } else if (tokenString == "if") {  // if
+  } else if (tokenString.front() == '-' && isdigit(tokenString[1])) {
+    // handle negative numbers
+    return parseNumber(); 
+  } else if (tokenString == "if") {
     return parseIf();
+  } else if (tokenString == "begin") {
+    return parseBegin();
+  } else if (tokenString == "again") {
+    return parseAgain();
+  } else if (tokenString == "while") {
+    return parseWhile();
   } else if (tokenString == ":") {  // colon definition
     return parseDefinition();
   } else if (tokenString == "recurse") {  // recurse
@@ -354,9 +414,7 @@ WordAST *parseToken(std::string tokenString) {
   }
   
   dropLine();
-  std::string errorMsg = "Unknown word \"" + tokenString + "\"";
-  throw errorMsg;
-
+  throw CompilerException("Unknown word \"" + tokenString + "\"");
 }
 
 
@@ -409,6 +467,52 @@ void IfAST::codeGen() {
   }
 
   builder.SetInsertPoint(mergeBB);
+
+}
+
+void BeginAST::codeGen() {
+
+  Function *currentFunction = builder.GetInsertBlock() -> getParent();
+
+  BasicBlock *beginBlock = BasicBlock::Create(getGlobalContext(), "begin", currentFunction);
+  BasicBlock *exitBlock = BasicBlock::Create(getGlobalContext(), "exitBlock", currentFunction);
+  beginBlocks.push(beginBlock);
+  exitBlocks.push(exitBlock);
+
+  builder.CreateBr(beginBlock);
+  builder.SetInsertPoint(beginBlock);
+
+}
+
+void AgainAST::codeGen() {
+  // currently doesn't work in JIT (outside of : defs)
+
+  // this stack approach to tracking begin and exit blocks is a bit quirky -
+  // for example, "again" will return to the last begin encountered at compile time, but 
+  // not necessarily whatever was most recently encountered at run time (but the latter 
+  // might be a more reasonable way to do it).
+
+  BasicBlock *beginBlock = beginBlocks.top();
+  BasicBlock *exitBlock = exitBlocks.top();
+  beginBlocks.pop();
+  exitBlocks.pop();
+  builder.CreateBr(beginBlock);
+
+  builder.SetInsertPoint(exitBlock); 
+
+}
+
+void WhileAST::codeGen() {
+  // currently doesn't work in JIT (outside of : defs)
+
+  Function *currentFunction = builder.GetInsertBlock() -> getParent();
+
+  BasicBlock *exitBlock = exitBlocks.top();
+  BasicBlock *afterWhile = BasicBlock::Create(getGlobalContext(), "afterWhile", currentFunction);
+
+  Value *cond = builder.CreateFCmpONE(builder.CreateCall(pop), getDouble(0.0), "ifCond");  
+  builder.CreateCondBr(cond, afterWhile, exitBlock); 
+  builder.SetInsertPoint(afterWhile);
 
 }
 
@@ -700,7 +804,7 @@ void codeGenBuiltIns() {
   Value *nextDownsPtr = buildGetStackPointer(tucksTop.ptr);
   Value *voidPtr = builder.CreateCall(malloc_, getInt64(stackItemSize), "mallocResult");
   Value *newItemPtr = builder.CreateBitCast(voidPtr, stackItemPointerType, "newStackItem");
-  buildSetStackItem(newItemPtr, top.val, nextDownsPtr); 
+  buildSetStackItem(newItemPtr, tucksTop.val, nextDownsPtr); 
   buildSetStackPointer(tucksTop.ptr, newItemPtr); 
   builder.CreateRetVoid();
 
@@ -718,6 +822,7 @@ void codeGenBuiltIns() {
   buildPrintDouble(a);
   builder.CreateRetVoid();
 
+  // dotS definition is long - it begins here
   dotS = buildFunction("dotS");  // Forth .s prints out the stack in LILO order, this is LIFO - fix?
   BasicBlock *entry = builder.GetInsertBlock();  // could the entry block replace one of the below?
   BasicBlock *checkBlock = BasicBlock::Create(getGlobalContext(), "checkBlock", dotS);
@@ -739,6 +844,7 @@ void codeGenBuiltIns() {
 
   builder.SetInsertPoint(finishedBlock); 
   builder.CreateRetVoid();
+  // dotS definition ends here
 
   words["+"] = add;
   words["-"] = sub;
@@ -774,7 +880,7 @@ void JITASTNode(WordAST *node) {  // very simple way to JIT execute a single wor
   node -> codeGen();
   builder.CreateRetVoid();
   void *FPtr = TheExecutionEngine->getPointerToFunction(F);
-  void (*FP)() = (void (*)())FPtr;  // look into how this works
+  void (*FP)() = (void (*)())FPtr;  // from Kaleidoscope - look into how this works
   FP();
   TheExecutionEngine -> freeMachineCodeForFunction(F);
 }
@@ -796,8 +902,8 @@ int mainLoop(bool JITMode) {
       } else {
         nextASTNode -> codeGen();
       }
-    } catch (std::string e) {  // TODO: Use more meaningful classes than std::string
-      std::cout << e << "\n";
+    } catch (CompilerException e) {  // TODO: Use more meaningful types than std::string or char const
+      std::cout << e.what() << "\n";
       if (!JITMode) {
         // If we're compiling a file, we want to stop here because we ran into an error
         return 1;  
