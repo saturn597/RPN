@@ -1,0 +1,75 @@
+( Rendition of fizzbuzz for RPN )
+
+( The word "fizzbuzz" outputs a series of numbers, 1-n, where n is whatever number it pops
+from the top of the stack. However, it replaces numbers divisible by 3 with -3 and numbers
+divisible by 5 with -5. Numbers divisible by both will output -3 and -5. )
+
+( The implementations of fizzbuzz here take two numbers from the top of the stack - the first
+is the starting value, and the second the ending value. )
+
+
+( A couple of useful functions - an implementation of not, !, and an implementation of the
+modulus operator, mod. )
+
+: ! 0 = ;
+
+: mod-helper recursive { a b n }
+  b n * a > if 
+    a 
+      b n 1 - * 
+    - 
+  else
+    a b n 1 + mod-helper 
+  then
+;
+
+: mod 0 mod-helper ; 
+
+
+( Now, two implementations of fizzbuzz.
+
+The first, below, uses the modulus operator defined above to decide whether a number is divisible 
+by 5, 3, both, or neither. )
+
+: fizzbuzz recursive { current max } 
+  current max > ! if 
+    current 5 mod 0 = if -5 . -1 else 0 then
+    current 3 mod 0 = if -3 . drop -1 then
+    0 = if current . then
+    current 1 + max fizzbuzz
+  then
+;
+
+1 100 fizzbuzz  ( Show it in action )
+
+
+( Second rendition of fizzbuzz starts here. It works by keeping counts on the stack of how many more 
+iterations are needed to hita number divisible by 5 and how many to hit a number divisible by 3. 
+
+This is more complicated, but is a useful exercise in keeping track of items on the stack. )
+
+: initial-3count 2 ;
+: initial-5count 4 ;
+
+: fizzbuzz-helper { 3count 5count current }
+  3count 0 > if 
+    5count 0 > if
+      current . 
+    then 
+  then
+  
+  3count dup 0 > if 1 - else drop -3 . initial-3count then
+  5count dup 0 > if 1 - else drop -5 . initial-5count then 
+  1 current + 
+;
+
+: fizzbuzz-loop { current max } 
+  current max > ! if
+    current fizzbuzz-helper max recurse then ;
+
+: fizzbuzz { min max }
+  initial-3count initial-5count min max fizzbuzz-loop 
+  drop drop  ( clean up stack after )
+;
+
+1 100 fizzbuzz  ( Show second implementation in action )

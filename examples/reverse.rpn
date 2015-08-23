@@ -1,0 +1,37 @@
+( Implementation of a stack reversing word, "reverse," and several helper functions to make it work. )
+
+: ! 0 = ;  ( a "not" word )
+
+: retrieve recursive { a n } 
+  ( pops off the top of the stack, n; retrieves the element n layers below that on the stack and puts it on top )
+  n 0 = ! if 
+    n 1 - retrieve a swap 
+  else a then 
+;
+
+: bury recursive { top a n } 
+  ( pops off the top of the stack, n; then pops the next item on the stack, and moves it n layers down )
+  n 0 = ! if 
+    a n 1 - bury top
+  else top a then 
+;
+
+: reverse-loop recursive { retrieve-depth bury-depth } 
+  bury-depth 1 + retrieve-depth < if 
+    retrieve-depth 1 - retrieve 
+    bury-depth bury 
+    retrieve-depth bury-depth 1 + reverse-loop
+  then 
+;
+
+: reverse 
+  ( pops off the top of the stack, n; reverses the contents of the stack down to n layers deep )
+  0 reverse-loop ;
+
+( Reverse is defined, so show it in action. )
+
+1 2 3 4 5 6 7 8 9 10 11  ( set up the stack )
+
+5 reverse  ( now reverse the top 5 elements )
+
+.s  ( show the result )

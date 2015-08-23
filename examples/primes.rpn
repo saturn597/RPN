@@ -1,0 +1,39 @@
+( Some words for finding prime numbers. This program outputs all primes from 1-100 except 2)
+
+
+: mod-helper recursive { a b n }
+  b n * a > if 
+    a 
+      b n 1 - * 
+    - 
+  else
+    a b n 1 + mod-helper 
+  then
+;
+
+: mod 0 mod-helper ; 
+
+: is-prime-loop recursive { n current }
+  n current mod 0 = if 
+    0 else
+      current 2 = if 
+        -1 else
+          n current 1 - is-prime-loop
+      then 
+    then
+;
+
+: is-prime 
+  dup 1 - is-prime-loop  
+;
+
+( Now just try out the above words - list all primes between 1 and 100 except 2 )
+
+100 
+
+begin 
+  1 - dup 1 > while 
+    dup is-prime if 
+      dup . 
+    then
+  again
