@@ -249,8 +249,12 @@ public:
   virtual void codeGen();
 };  // maybe merge this class with BasicWord
 
-
 class RecurseAST : public WordAST {
+public:
+  virtual void codeGen();
+};
+
+class CommentAST : public WordAST {
 public:
   virtual void codeGen();
 };
@@ -372,10 +376,9 @@ WordAST *parseComment() {
     if (nextChar == EOF) throw CompilerException(") expected");
     if (nextChar == ')') break;
   }
-  getNextChar(true);
-  getNextToken();
+  getNextChar(true);  // eat ")"
 
-  return parseToken(curTok);
+  return new CommentAST();
 
 }
 
@@ -555,6 +558,8 @@ void RecurseAST::codeGen() {
 void LocalRefAST::codeGen() {
   builder.CreateCall(push, builder.CreateLoad(currentLocals[name]));
 }
+
+void CommentAST::codeGen() {}  // don't do anything for comments
 
 
 /////////////////////////////////////
