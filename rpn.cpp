@@ -348,7 +348,8 @@ DefinitionAST *parseDefinition() {  // Note: this will allow colon definitions i
     while (curTok != "}") {
       if (curTok == "") throw CompilerException("} expected");  // eof before end of locals definition
       locals.push_back(curTok);  // report on duplicates?
-      getNextToken();
+      currentLocals[curTok] = Constant::getNullValue(Type::getDoubleTy(getGlobalContext()));  // set to null for now - we'll do more when we codegen
+      getNextToken(); 
     } 
     getNextToken();  // eat }
   }
@@ -357,11 +358,7 @@ DefinitionAST *parseDefinition() {  // Note: this will allow colon definitions i
 
   while (curTok != ";") {
     if (curTok == "") throw CompilerException("; expected");  // eof before end of definition
-    if (std::find(locals.begin(), locals.end(), curTok) != locals.end()) {  // word is a local
-      content.push_back(new LocalRefAST(curTok));
-    } else {  // if word is not a local, parse it normally
-      content.push_back(parseToken(curTok));
-    }
+    content.push_back(parseToken(curTok));
     getNextToken();
   }  
 
@@ -385,7 +382,9 @@ WordAST *parseComment() {
 WordAST *parseToken(std::string tokenString) { 
   // General function for parsing any top level token
 
-  if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
+  if (currentLocals.count(tokenString) == 1) {
+    return new LocalRefAST(tokenString);
+  } else if (words.count(tokenString) == 1) {  // test if our list of defined words contains the tokenString
     // If so, this is just a basic word
     // Currently I search words for tokenString twice - once here and once during codegen - fix?
     // Does this allow EOF shenannigans? Should I check EOF first?
@@ -491,6 +490,9 @@ void AgainAST::codeGen() {
   // for example, "again" will return to the last begin encountered at compile time, but 
   // not necessarily whatever was most recently encountered at run time (but the latter 
   // might be a more reasonable way to do it).
+
+  // Maybe look into how this is handled by forth.
+  // : weird 10 begin 1 - dup . dup 0 > if again then ; fails in gforth, but counts down from 10 in RPN
 
   BasicBlock *beginBlock = beginBlocks.top();
   BasicBlock *exitBlock = exitBlocks.top();
