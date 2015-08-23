@@ -376,7 +376,7 @@ WordAST *parseComment() {
     if (nextChar == EOF) throw CompilerException(") expected");
     if (nextChar == ')') break;
   }
-  getNextChar(true);  // eat ")"
+  getNextChar(true);
 
   return new CommentAST();
 
