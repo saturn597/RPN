@@ -2,19 +2,21 @@ About
 =====================
 RPN (short for "reverse polish notation") is a compiler for a toy Forth-like language. It compiles to LLVM IR and was created to teach myself about LLVM and compilers. Along the way, I also learned some C++ and Forth.
 
-RPN has Forth-inspired commands and syntax, including several stack-manipulating words, the ability to define new words, including words with recursive definitions, and loops. It features a JIT-compiling REPL and can also be used to generate stand-alone executables (by piping to clang).
+RPN has Forth-inspired commands and syntax, including several built-in stack-manipulating words, the ability to define new words, and loops. It features a JIT-compiling REPL and can also be used to generate stand-alone executables (by piping to clang).
 
-I used the "Kaleidoscope" compiler, provided in the [LLVM documentation](http://llvm.org/docs/tutorial/LangImpl1.html), as a base for this program.
+I referenced the "Kaleidoscope" compiler, provided in the [LLVM documentation](http://llvm.org/docs/tutorial/LangImpl1.html), as basis for this program.
 
-I used the GNU project's Gforth and the [Gforth manual](http://www.complang.tuwien.ac.at/forth/gforth/Docs-html/index.html) as a reference for various aspects of Forth (though RPN does not attempt to completely faithful to Forth). 
+I also used the GNU project's Gforth and the [Gforth manual](http://www.complang.tuwien.ac.at/forth/gforth/Docs-html/index.html) as a reference for various aspects of Forth (though RPN is not perfectly faithful to Forth). 
 
 Compiling the compiler
 =====================
-Compiling the compiler requires LLVM 3.4. Given the rapid pace of LLVM's development, other versions of LLVM probably will not work.
+Compiling the compiler requires LLVM 3.4. Given the rapid pace of LLVM's development, other versions of LLVM probably will not work without some tweaking.
 
-Using Clang, provided the appropriate version of LLVM is installed, the following should produce an executable compiler called "rpn":
+Using Clang, the following should produce an executable compiler called "rpn", provided you have installed the appropriate version of LLVM:
 
 ``clang++ rpn.cpp `llvm-config --cppflags --ldflags --libs core jit native` -o rpn``
+
+A similar command should work for g++ as well. Depending on the version of your C++ compiler, you may need to specify `--std=c++11`.
 
 Usage
 =====================
@@ -26,7 +28,7 @@ You can start RPN's JIT-compiling REPL by running the `rpn` executable. You will
 
 `Ready>`
 
-You can immediately begin typing commands and you will see the results after pressing return. Each RPN "word" you type is compiled into native machine code and executed. 
+You can immediately begin typing commands and you will see the results after pressing return. While in the interpreter, each RPN "word" you type is compiled into native machine code and executed. 
 
 Alternatively, you can use RPN to generate LLVM intermediate representation code (IR). Typing:
 
@@ -34,7 +36,7 @@ Alternatively, you can use RPN to generate LLVM intermediate representation code
 
 will compile the RPN code contained in `program.rpn` and display the resulting LLVM IR in your terminal.
 
-To actually run the program, you can pipe the output to LLVM's interpreter, lli:
+To actually run the program, you can pipe the output to LLVM's IR interpreter, lli:
 
 `./rpn program.rpn | lli`
 
@@ -46,23 +48,27 @@ This will produce an executable file called "program."
 
 Example programs
 =====================
-You will find several example programs in the "examples" directory of this repository. There is a sample "fizzbuzz" program, another program that can identify and list prime numbers, and a program demonstrating an algorithm that reverses the stack down to a given depth.
+You will find several example programs in the "examples" directory of this repository. There is a sample "fizzbuzz" program, another program that can identify and list prime numbers, and a program that defines a word capable of reversing RPN's stack down to an arbitrary depth.
 
-You can view the source or try running or compiling them using the methods discussed above. For example:
+You can run these examples using the methods discussed under "Usage". For example, the following line will run the example "primes.rpn" in LLVM's interpreter:
 
 `./rpn examples/primes.rpn | lli`
+
+Whereas this line will produce an executable program called "primes":
 
 `./rpn examples/primes.rpn | clang -x ir -o primes -`
 
 The remainder of this document will describe the RPN language as it has been built so far.
 
-Pushing to the stack
+Language basics
 =====================
 Like Forth, RPN operates on "words." Words are sequences of characters separated by whitespace. They can contain any characters except white space. 
 
 Note that RPN words, like Forth words, are case insensitive - `DUP` or `DuP` or `duP` all mean the same thing.
 
-Also, like Forth, RPN operates on a mostly last-in-first-out stack. The simplest thing you can do is to push a number to the top of the stack. To do this, simply enter the number. In the REPL:
+Also, like Forth, RPN operates on a stack. RPN's stack is (mostly) last-in-first-out.
+
+The simplest thing you can do is to push a number to the top of the stack. To do this, just enter the number. In the REPL:
 
 `Ready> 2.739`
 
@@ -74,11 +80,11 @@ After we type it and press return, the number 2.739 is now on RPN's stack. To po
 
 `2.739000`
 
-If you enter the `.` again, the program will crash, since there is nothing left that can be popped off the stack.
+Note that if you enter a `.` again, the program will crash, since there is nothing left that can be popped off the stack.
 
 Simple Arithmetic
 =====================
-If you have two numbers on the stack, you can add them. The `+` word pops the top two numbers off the stack, adds them, then puts the result back on the top of the stack. (More precisely: it pops the top number, then replaces the new top value with the result, but the effect is mostly the same). You can then see the result with `.`:
+If you have two numbers on the stack, you can add them using the `+` word. `+` pops the top two numbers off the stack, adds them, then puts the result back on the top of the stack. (More precisely, it pops the top number, then replaces the new top value with the result.) You can then see the result of the addition with `.`:
 
 `Ready> 2.739`
 
@@ -96,7 +102,9 @@ You can achieve the same thing with just one line of code:
 
 `8.417000`
 
-RPN also recognizes the arithmetic operators `*`, `-`, and `/`, as well as a `negate` word that switches the number at the top of the stack to its negative. For example:
+RPN also recognizes the arithmetic operators `*`, `-`, and `/`, as well as a `negate` word that negates the number at the top of the stack. Note that binary operators take the top of the stack as the second/rightmost number in the operation - so `6 3 /` results in 2, since the stack had 3 on top and 6 below that.
+
+For example:
 
 `Ready> 4 2 15 3 / * - negate .`
 
@@ -104,31 +112,31 @@ RPN also recognizes the arithmetic operators `*`, `-`, and `/`, as well as a `ne
 
 In the above line, the first four words the JIT encounters are numbers, so each is pushed to the stack in order from left to right. Then, the first operation, division, pops 15 and 3 off the stack. It then places the result of dividing those two numbers on top.
 
-So the top of the stack is now 5, and 2 is the next number down. Thus, the next operation, multiplication, pops those off and pushes the result of multiplying them, 10, to the top of the stack.
+So the top of the stack is now 5, and 2 is the next number down. The next operation, multiplication, pops those off and pushes the result of multiplying them, 10, to the top of the stack.
 
 Now the stack contains 10 at the top and 4 as the second item down. Subtracting 10 from 4 then yields -6.
 
-`Negate` turns this into a positive 6. Then, finally, `.` pops the 6 from the top of the stack and prints it.
+The `negate` turns this into a positive 6. Then, finally, `.` pops the 6 from the top of the stack and prints it.
 
 Comments
 =====================
-You can add comments to your RPN code. You begin a comment with the word `(`. The comment is then ended with a `)`. 
+The word `(` indicates the beginning of a comment. Comments are then ended with a `)`. 
 
 `Ready> 4 3 ( this will be 7 ) + .`
 
 `7.000000`
 
-Because there has to be a space on either side of the starting parenthesis (so that the tokenizer recognizes it as a separate word), the following does not work as you might expect: 
+There has to be a space on either side of the `(` in order for RPN to recognize it as a separate word. Thus, the following does not work: 
 
 `Ready> 4 3 (this will be 7) + .`
 
 `Unknown word "(this"`
 
-Note that, once you begin a comment in the REPL, all input will be ignored until you close it, including new lines, since it is assumed you are still entering your comment. 
+However, the closing parenthesis `)` does *not* need to have a space on either side in order to close the comment.
 
 Stack manipulation
 =====================
-If you want to see the entire contents of the stack, without popping anything off of it, use the word `.s`:
+If you want to see the entire contents of the stack, without popping anything, use the word `.s`:
 
 `Ready> 1 2 3 .s`
 
@@ -138,9 +146,9 @@ If you want to see the entire contents of the stack, without popping anything of
 
 `1.000000`
 
-Note that `.s` in RPN lists items from the top of the stack down (Gforth's `.s` goes from the bottom up).
+Note that `.s` in RPN lists items from the top of the stack down. In contrast, Gforth's `.s` goes from the bottom up.
 
-One built-in word for manipulating the stack is `dup`, which simply duplicates the top item on the stack:
+RPN has a number of built-in words for manipulating the stack, all of which are based on words in Gforth. One of these is `dup`, which simply duplicates the top item on the stack:
 
 `Ready> 1 2 3 dup .s`
 
@@ -152,7 +160,7 @@ One built-in word for manipulating the stack is `dup`, which simply duplicates t
 
 `1.000000`
 
-Another built-in stack-manipulation word is "swap":
+Another built-in stack manipulation word is "swap":
 
 `Ready> 1 2 3 swap .s`
 
@@ -162,17 +170,15 @@ Another built-in stack-manipulation word is "swap":
 
 `1.000000`
 
-An easy way to describe the results of these kinds of words follows this format:
+Here's an abbreviated way of describing the effect of `dup` and `swap`, based on a Forth convention for comments:
 
-(stack before) -- (stack after)
-
-Using this format, swap and dup can be described like this:
+word: (stack before) -- (stack after)
 
 `dup`: x1 -- x1 x1
 
 `swap`: x1 x2 -- x2 x1
 
-In addition to `dup` and `swap`, RPN has several other stack manipulation words built in. They can be described as follows:
+This notation provides an easy way to describe several other stack manipulation words built into RPN:
 
 `drop`: x1 --
 
@@ -182,13 +188,11 @@ In addition to `dup` and `swap`, RPN has several other stack manipulation words 
 
 `tuck`: x1 x2 -- x2 x1 x2
 
-All of these words are based on similar words in Gforth.
-
 Comparisons and conditionals
 =====================
-RPN represents false with 0 and true with -1, similarly to Gforth. (In fact, any non-zero number in RPN is true).
+RPN represents false with 0 and true with -1, similarly to Gforth. In fact, RPN will take any non-zero number to be true.
 
-Further, RPN recognizes comparison operators <, >, and =. These pop the top two items from the stack, apply the comparison, and push the result (-1 or 0) to the top of the stack.
+Further, RPN recognizes the comparison operators <, >, and =. These pop the top two items from the stack, make the comparison, and push the result to the top of the stack. The result will be either -1 or 0 depending on whether the comparison is true or false.
 
 `Ready> 1 2 < .`
 
@@ -198,15 +202,15 @@ Further, RPN recognizes comparison operators <, >, and =. These pop the top two 
 
 `-0.000000`
 
-Now you can make things happen conditionally using the words `if` and `then`. 
+Knowing RPN's treatment of truth and falsehood, you can now make things happen conditionally using the words `if` and `then`. 
 
-`If` pops the top of the stack. If the top is true (non-zero), then the words immediately following `if` are executed. Otherwise, the words immediately following `if` are skipped and execution jumps to the word immediately following `then`.
+`If` pops the top of the stack. If the top of the stack is true (non-zero), then the words immediately following `if` are executed. Otherwise, the words immediately following `if` are skipped and execution jumps to the word immediately following `then`. For example:
 
 `Ready> 1 2 3 < if 5 2 + then .`
 
 `7.000000`
 
-2 is less than 3. Thus, in the above line, the top word on the stack is true (i.e., -1) after the `<`. Thus, the `if` pops off a true, and the words immediately following if (`5 2 +`) are executed. This results in 7 being placed on the top of the stack. 
+2 is less than 3. Thus, the `<` leaves -1 (or true) on top of the stack. The `if` then pops off -1. Because `if` popped a true value, the words that immediately follow (`5 2 +`) are executed. This results in 7 being placed on the top of the stack, which is output the `.` is executed. 
 
 Now try it with `>` instead of `<`:
 
@@ -214,7 +218,7 @@ Now try it with `>` instead of `<`:
 
 `1.000000`
 
-If we switch the "less than" to a "greater than", execution skips to the point after `then`. 7 isn't placed on top of the stack, and the stack contains only the 1 by the time we reach the ending `.`.
+`>` leaves 0 (or false) on top of the stack, since 2 is not greater than 3. The `if` pops off the "false", and execution skips to the point after `then`. As a result, `5 2 +` is never executed, 7 is never placed on top of the stack, and we are left with only 1 on the stack.
 
 RPN also has an `else`. Observe:
 
@@ -226,14 +230,14 @@ RPN also has an `else`. Observe:
 
 `3.000000`
 
-When an "else" is present, if `if` pops something true (non-zero) from the top of the stack, then the words immediately following `if` are executed up until the `else`, but the words between `else` and `then` are skipped. If `if` pops something false, it skips to the point after the `else`.
+If `if` pops something true (non-zero) from the top of the stack, then the words immediately following `if` are executed up until the `else`, but the words between `else` and `then` are skipped. If `if` pops something false, it skips to the word after the `else`.
 
 Defining new words
 =====================
 
-You can also define your own words. The beginning of a word definition is denoted with `:`. The next word after that is the name of the new word being defined. Any series of RPN words or numbers then follows. That series of words/numbers describes what will happen every time your new word appears. The definition is terminated by a `;`. 
+RPN lets you define your own words. The beginning of a word definition is denoted with `:`. The `:` is then followed by a name for the newly defined word. Any series of RPN words and/or numbers then follows. This series of words and/or numbers describes what will happen whenever the word is encountered. The definition is terminated by a `;`. 
 
-To define a word called `times10`, try 
+For example, to define a word called `times10`, try 
 
 `Ready> : times10 10 * ;`
 
@@ -245,23 +249,35 @@ Now you can use `times10` anywhere you would otherwise write `10 *`.
 
 `50.000000`
 
-You can also give a word local variables. At the beginning of the word definition, insert a list of variable names between curly braces. For each variable name listed, a value will be popped off the stack and stored in that variable, which may then be used repeatedly without further effect on the stack.
+You can also give a word local variables. To do this, insert a list of variable names between curly braces at the beginning of the word definition, but before the new word name. For each variable name listed, a value will be popped off the stack and assigned to that variable. This happens from right to left, so the rightmost variable gets whatever is on top of the stack. 
 
-`Ready> : add-triples { a b } a a a + + b b b + + + ;`
+Now, any time the local variable appears within the word definition, the value assigned to it will be pushed to the top of the stack. For example: 
 
-`Ready> 1 2 add-triples .`
+`Ready> : local-test { a b c } a . b . c . b . a . c . ;`
 
-`9.000000`
+`Ready> 1 2 3 local-test`
+
+`1.000000`
+
+`2.000000`
+
+`3.000000`
+
+`2.000000`
+
+`1.000000`
+
+`3.000000`
 
 Recursion and loops
 =====================
-You cannot normally refer to the word being defined within the word definition itself, because the word has not been defined yet:
+You cannot normally refer to a word being defined within the word definition itself, because the word has not been defined yet:
 
 `Ready> : inf 1 + dup . inf ;`
 
 `Unknown word "inf"`
 
-However, you can if you explicitly declare that you are making a recursive definition:
+However, RPN will allow you to do this if you explicitly declare that a definition is recursive. You do this by typing `recursive` after the word name but before the definition of locals:
 
 `Ready> : inf recursive 1 + dup . inf ;`
 
@@ -279,9 +295,7 @@ However, you can if you explicitly declare that you are making a recursive defin
 
 Etc.
 
-The `recursive` goes before the definition of locals.
-
-Alternatively, you can use the word `recurse` to refer to the word currently being defined, even without explicitly declaring the word to be recursive:
+You can also use the word `recurse` to refer to the word currently being defined, even if you have not explicitly declared the word to be recursive. The following is equivalent to the `inf` word above:
 
 `Ready> : inf 1 + dup . recurse ;`
 
@@ -289,11 +303,11 @@ RPN also allows looping via `begin` and `again`. `Begin` signals the beginning o
 
 `Ready> : inf begin 1 + dup . again ;`
 
-This has the same results as the `inf` word defined recursively above.
+This, again, has the same results as the `inf` word defined recursively above.
 
 Note that nested "begin" and "again" blocks may not function the way you would expect when `if`s are involved. (For its part, Gforth does not appear to allow `again` as the result of an `if`).
 
-Finally, RPN has a `while` word that goes inisde `begin`/`again` blocks. `While` pops the top value from the stack. If that value is true, execution continues until reaching `again`, at which point we jump back to `begin`. If the value is false, execution skips to the point immediately after the `again` and thus exits the loop.
+Finally, RPN has a `while` word that goes inside `begin`/`again` blocks. `While` pops the top value off the stack. If that value is true (non-zero), execution continues until it reaches the `again`, at which point execution jumps back to `begin`. If the value is false, execution skips to the point immediately after the `again`, exiting the loop.
 
 For example:
 
@@ -311,7 +325,7 @@ For example:
 
 Quirks
 =====================
-Finally, one quirk: at the beginning of an RPN program, the stack is actually initialized with a single item, the value of which is "null" and that has nothing above or below it. This can lead to some strange behavior. For example, on first starting up the RPN REPL:
+A quirk: at the beginning of an RPN program, the stack is actually initialized with a single item, the value of which is "null" and that has nothing above or below it. This can lead to some strange behavior. For example, on first starting up the RPN REPL:
 
 `Welcome to rpn!`
 

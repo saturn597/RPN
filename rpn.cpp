@@ -73,7 +73,7 @@ Value *fstring;
 std::map<std::string, Function *> words;
 std::map<std::string, Value *> currentLocals;
 
-std::istream *theStream;
+std::istream *inputStream;
 
 std::stack<BasicBlock *> beginBlocks;
 std::stack<BasicBlock *> exitBlocks;
@@ -138,7 +138,7 @@ static char getNextChar(bool advance) {
     pos++;
     if (pos == theLine.end()) {
       if (showPrompt) std::cout << "Ready> ";
-      if (!getline(*theStream, theLine)) return EOF;
+      if (!getline(*inputStream, theLine)) return EOF;
       theLine.append("\n");
       pos = theLine.begin();
     }
@@ -928,7 +928,7 @@ int main(int argc, char *argv[]) {
 
   if (argc == 1) {  // if no file, then we just read stdin in JITMode
     JITMode = true;
-    theStream = &std::cin;
+    inputStream = &std::cin;
   } else if (argc == 2) {  // otherwise open the file we got on the command line
     JITMode = false;
     fs.open(argv[1]);
@@ -936,7 +936,7 @@ int main(int argc, char *argv[]) {
       std::cout << "Couldn't open file \"" << argv[1] << "\"\n";
       return 1;
     }
-    theStream = &fs;  // point theStream to our file so other functions can use it
+    inputStream = &fs;  // point inputStream to our file so other functions can use it
   } else {
     std::cout << "usage: rpn [filename]\n";
     return 1;
