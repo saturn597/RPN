@@ -122,7 +122,7 @@ class CompilerException: public std::runtime_error {
 
 bool showPrompt = false;  // show prompt when getting next line?
 
-static char getNextChar(bool advance) {
+static int getNextChar(bool advance) {
   // returns the next character from stdin (or returns the last char read if !advance)
 
   // Adding this function so that dropLine and gettok can have a char buffer in common (lastChar).
@@ -131,14 +131,14 @@ static char getNextChar(bool advance) {
   // It's also possible this could work without even sharing a char buffer
 
   static std::string theLine = " ";
-  static char lastChar = ' ';
+  static int lastChar = ' ';
   static std::string::iterator pos = theLine.begin();
 
   if (advance) {
     pos++;
     if (pos == theLine.end()) {
       if (showPrompt) std::cout << "Ready> ";
-      if (!getline(*inputStream, theLine)) return EOF;
+      if (!getline(*inputStream, theLine)) return lastChar = EOF;
       theLine.append("\n");
       pos = theLine.begin();
     }
@@ -151,7 +151,7 @@ static char getNextChar(bool advance) {
 static void dropLine() {
   // consumes input until the next newline or until EOF
 
-  char currentChar = getNextChar(false); 
+  int currentChar = getNextChar(false); 
   while (currentChar != '\n' && currentChar != EOF) currentChar = getNextChar(true);
 
 }
@@ -954,10 +954,10 @@ int main(int argc, char *argv[]) {
   TheStack = (GlobalVariable*)(theModule -> getOrInsertGlobal("thestack", stackItemType));
   TheStack -> setInitializer(Constant::getNullValue(stackItemType));
 
-  codeGenBuiltIns();
-  
   DataLayout dl = DataLayout("");
   stackItemSize = dl.getTypeAllocSize(stackItemType);
+
+  codeGenBuiltIns();
 
   if (JITMode) {
     // if we're JITing, we need to set up an execution engine
